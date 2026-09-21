@@ -11,6 +11,8 @@
 
 - **接口文档** —— 已实现的**全部**应用都照它走，包括文档翻译 / 作文评阅 /
   知识库问答这三条早先标成"逆向"的链路（2026-09-21 订正，端点全在文档里）。
+- **凭证** —— 可以用 `sso login` 给账号密码自动续期，也可以继续手动粘 JWT；
+  两条路并存，见「配置凭证」。
 - **黑盒逆向**（前端 webpack 产物 + 抓包）—— 只剩**极少数文档没写的字面量**，
   五处，逐条列在 [docs/call-chains.md](docs/call-chains.md) §0.1，
   **每一处都实测过，没有一处是"文档写错了"**。
@@ -71,7 +73,7 @@ python3 -m pip install -r requirements.txt
 
 | skill | 触发方式 | 管什么 |
 | --- | --- | --- |
-| `guide` | **只能用户唤起** `/unipus-aigc:guide` | 配凭证、体检 token、`records`/`cleanup`、平台应用的路由 |
+| `guide` | **只能用户唤起** `/unipus-aigc:guide` | 配凭证（含 `sso login` 自动续期）、体检 token、`records`/`cleanup`、平台应用的路由 |
 | `translate` | 模型可自触发 | 文本翻译、文档翻译 |
 | `review` | 模型可自触发 | 英语作文智能评阅 |
 | `trans-review` | 模型可自触发 | 翻译评阅（译文打分，**不产出译文**） |
@@ -89,6 +91,35 @@ python3 -m pip install -r requirements.txt
 
 ## 配置凭证
 
+两种方式，**推荐第一种**。
+
+### 方式一：账号密码，之后自动续期（推荐）
+
+```bash
+S=skills/guide/scripts/run.sh
+printf '<你的密码>' | $S sso login --account <邮箱> --stdin
+```
+
+密码**从 stdin 读**（避免进 `ps` 和 shell 历史）。配一次之后：
+
+* JWT 每 48 小时自动换新（`rt` 换，不用密码）；
+* `rt` 30 天过期后，用落盘的密码自动重登；
+* 全程无感，`load_token()` 里按需续，还早的话**不打网络**。
+
+```bash
+$S sso status      # 看材料齐不齐、JWT/rt 各还剩多久
+$S sso forget      # 反悔：删掉密码和 rt，只留 JWT（不带 --yes 只列不删）
+```
+
+> ⚠️ **密码会加密落盘**（`UNIPUS_AIGC_PASSWORD_ENC`，AES-128-CBC +
+> HMAC-SHA256）。但**密钥默认和 `.env` 在同一个目录**（`secret` 文件），
+> 所以这层加密挡的是"`.env` 被单独备份 / 分享 / 误提交"，
+> **挡不住**能读你 home 目录的进程。想真隔开就把 `UNIPUS_AIGC_SECRET`
+> 放进环境变量（比如从系统钥匙串注入）。详见
+> [docs/call-chains.md](docs/call-chains.md) §11。
+
+### 方式二：手动粘一枚 JWT
+
 JWT 是**你自己的登录凭证，等于账号密码**。
 
 获取方式：登录 <https://ai.unipus.cn> → 浏览器开发者工具 → Local Storage →
@@ -96,6 +127,8 @@ JWT 是**你自己的登录凭证，等于账号密码**。
 
 **推荐走 skill**：把 JWT 告诉 Claude，`/unipus-aigc:guide` 会调 `set-token` 落盘，
 回显只有路径、sha256 指纹和有效期，**不复述 token 本身**。
+
+代价是 48 小时后要再粘一次，所以够不上方式一方便。
 
 读取优先级（先到先得）：
 
@@ -160,6 +193,10 @@ bash skills/text-gen/scripts/run.sh article create --title "AI 与教育"     # 
 bash skills/text-gen/scripts/run.sh article title --article-id <id> -t 1  # 10 条标题
 bash skills/text-gen/scripts/run.sh article outline <id> --path a.txt     # markdown 大纲
 bash skills/text-gen/scripts/run.sh article continue <id> --start "…" --end "…"
+
+# 凭证自动续期（guide 域）：配一次，JWT 每 48 小时自动换新
+printf '<密码>' | bash skills/guide/scripts/run.sh sso login --account <邮箱> --stdin
+bash skills/guide/scripts/run.sh sso status        # 看还剩多久
 
 # 列出历史记录 / 清理测试数据（guide 域）
 bash skills/guide/scripts/run.sh records
@@ -235,8 +272,12 @@ lib/unipus_aigc/
 ├── question_gen.py 智能出题（op12 + `rm/*` + `ques/*`）
 ├── image_gen.py   AI 绘画（op10 + `img/*`；风格白名单现取，两级本地校验）
 ├── article.py     文章写作 / 文本生成（`article/*` + `lm/*` 流式）
+├── sso.py         SSO 登录 + JWT 自动续期（纯标准库 AES）
 ├── cli.py         命令行入口
 └── errors.py      AigcError / TaskFailed / TaskTimeout / StillRunning / MissingTokenError
+~/.config/unipus-aigc/
+├── .env           凭证（600）：JWT / rt / 账号 / 加密后的密码
+└── secret         本地加密密钥（600，`sso login` 首次自动生成）
 docs/call-chains.md    完整调用链（全部按文档实现；§0.1 是实测修正清单）
 docs/app-catalog.md    平台应用全景清单 + 可做性分档
 docs/agents/           本仓库自己的 agent 工作流约定
@@ -440,8 +481,11 @@ docs/agents/           本仓库自己的 agent 工作流约定
 
 - token 有效期看 JWT 的 `exp`（实测有 24h 也有 48h 的），过期后重新登录复制。
   `run.sh token` 会提示剩余天数。
+  **配了 `sso login` 的话不用管**——JWT 会在到期前 5 分钟自动换新（见上）。
 - `.env` 已在 `.gitignore` 里，**不要提交**。`~/.config/unipus-aigc/.env` 在仓库外，
   但同样是明文凭证，权限已设 `600`。
+  **用了 `sso login` 之后那个文件里还多一份加密的账号密码**——加密密钥
+  （`secret`）默认就在同目录，所以这两件事的门槛一样，别只搬走 `.env`。
 - `cleanup` / `kb delete` 默认只列出不删除，加 `--yes` 才真删。用 `--ids` 精确指定
   比 `--pattern` 安全。平台自带的"默认知识库"不会被删。
   **skill 不会替用户按 `--yes`。**

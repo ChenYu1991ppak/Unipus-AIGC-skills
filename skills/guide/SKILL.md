@@ -1,11 +1,12 @@
 ---
 name: guide
 description: >-
-  Entry point for the Unipus AIGC plugin. Configure the login credential (JWT),
-  check token validity, list or clean up platform records, and route the user to
-  the right application skill (translate / review / kb-qa) or tell them what the
-  platform can and cannot do yet. Unipus AIGC 引导入口：配置登录凭证、体检 token、
-  查看与清理历史记录、按需求路由到应用 skill。
+  Entry point for the Unipus AIGC plugin. Configure the login credential — either
+  account+password with automatic JWT renewal (sso login) or a manually pasted
+  JWT — check token validity, list or clean up platform records, and route the
+  user to the right application skill or tell them what the platform can and
+  cannot do yet. Unipus AIGC 引导入口：配置登录凭证（含账号密码自动续期）、
+  体检 token、查看与清理历史记录、按需求路由到应用 skill。
 disable-model-invocation: true
 ---
 
@@ -70,6 +71,40 @@ python3 -m pip install -r "<plugin 根>/requirements.txt"
 
 ## 第 2 步：配凭证
 
+**两种方式，先问用户要哪种。** 默认推荐方式一。
+
+### 方式一：账号密码，之后自动续期（推荐）
+
+问用户要**账号（邮箱）和密码**，然后：
+
+```bash
+printf '%s' '<用户给的密码>' | bash "$S/scripts/run.sh" sso login --account '<邮箱>' --stdin
+```
+
+用 `--stdin` 传密码——位置参数会进 `ps` 和 shell 历史。
+
+配一次之后 JWT 每 48 小时自动换新，`rt` 30 天过期后自动用密码重登。
+**以后不用再管凭证。**
+
+必须对用户说清楚的三件事（**别省略**）：
+
+> 1. **密码会加密落盘**（`UNIPUS_AIGC_PASSWORD_ENC`）。
+> 2. **但密钥默认和 `.env` 放在同一个目录**（`~/.config/unipus-aigc/secret`），
+>    所以这层加密挡的是"`.env` 被单独备份 / 分享 / 误提交"，
+>    **挡不住能读你 home 目录的进程**。
+> 3. 想真隔开就把 `UNIPUS_AIGC_SECRET` 放进环境变量（比如从系统钥匙串注入）。
+>    改主意了：`sso forget` 会把密码和 rt 一并删掉（**不带 `--yes` 只列不删**）。
+
+**回显只说：写入路径、账号、JWT 指纹、有效期。绝不复述密码或任何 token。**
+
+中途要看状态：
+
+```bash
+bash "$S/scripts/run.sh" sso status     # 材料齐不齐、JWT/rt 各还剩多久
+```
+
+### 方式二：手动粘一枚 JWT
+
 JWT 是用户**自己**的登录凭证，**等于账号密码**。
 
 让用户自己去拿（不要替他猜、不要用任何别人的凭证）：
@@ -94,6 +129,8 @@ printf '%s' '<用户给的 JWT>' | bash "$S/scripts/run.sh" set-token --stdin
 必须对用户说清楚的一句话：
 
 > **JWT 等于账号密码，不要提交到仓库、不要转发给任何人。**
+
+（方式二的代价：**48 小时后要再粘一次**，够不上方式一方便。）
 
 凭证读取优先级（先到先得）：
 

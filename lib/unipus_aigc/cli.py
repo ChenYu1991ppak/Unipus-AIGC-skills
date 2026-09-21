@@ -214,6 +214,148 @@ def cmd_set_token(args):
     return EXIT_OK if r["valid"] else EXIT_ERROR
 
 
+def cmd_sso_login(args):
+    """账号密码登录 SSO，落盘一整套凭证（JWT + rt + 加密后的密码）。
+
+    **密码从 stdin 读**——跟 ``set-token`` 一个道理：位置参数会进 ``ps``
+    和 shell 历史。回显只有账号、指纹、有效期，**不复述任何明文凭证**。
+    """
+    password = args.password or ""
+    if args.stdin:
+        password = sys.stdin.readline().rstrip("\n")
+    if not password.strip():
+        _note("需要从 stdin 给密码（推荐 `--stdin`），或 --password（会进 ps，不推荐）")
+        return 2
+    if not args.account:
+        _note("需要 --account <邮箱>")
+        return 2
+
+    from . import sso
+    try:
+        pair = sso.login(args.account, password)
+    except AigcError as e:
+        _note(f"登录失败：{e}")
+        return EXIT_ERROR
+
+    r = config.save_credentials(pair["jwt"], pair["rt"], account=args.account,
+                                password=password,
+                                jwt_expire=pair["jwtExpire"],
+                                rt_expire=pair["rtExpire"],
+                                path=args.path, scope=args.scope)
+    print(f"已写入   : {r['path']}")
+    print(f"账号     : {r['account']}")
+    print(f"JWT 指纹 : {r['fingerprint']}")
+    if r.get("backup"):
+        print(f"旧凭证已备份: {r['backup']}")
+    if r.get("synced"):
+        _note(f"[同步] 另把新 JWT 写进了：{', '.join(r['synced'])}")
+        _note("        （`./.env` 的优先级高于用户级文件，不同步的话它会盖住新的。）")
+    if r.get("expires_in"):
+        print(f"JWT 有效 : {r['expires_in'] / 3600:.1f} 小时")
+    if r.get("rt_expires_in"):
+        print(f"rt 有效  : {r['rt_expires_in'] / 86400:.1f} 天")
+    print(f"密码     : 已加密落盘（{config.ENV_PASSWORD_ENC}）")
+    _note("")
+    _note("几点必须知道的：")
+    _note("* 密码**明文可解**——密钥在同目录的 `secret` 文件里。见 config.load_secret 的说明。")
+    _note("* 想让它只挡意外泄漏，把 UNIPUS_AIGC_SECRET 放进环境变量（别落盘）。")
+    _note("* rt 过期前会自动用密码重登，全程不用管。")
+    _note("* 改主意了：`run.sh sso forget --yes` 会把密码和 rt 一并删掉。")
+    return EXIT_OK
+
+
+def cmd_sso_refresh(args):
+    """强制续一次期（正常情况下不用手动跑，``load_token`` 会自己续）。"""
+    config._load_all_dotenv()          # 不先加载，_has_credentials 看不到文件里的值
+    if not config._has_credentials():
+        _note(f"没有续期材料（既没有 {config.ENV_RT}，也没有账号密码）")
+        _note(f"先跑 `run.sh sso login --account <邮箱>`，或继续用手动粘的 JWT。")
+        return EXIT_ERROR
+    try:
+        r = config.refresh_credentials(reason="手动刷新", force_login=args.relogin)
+    except AigcError as e:
+        _note(f"续期失败：{e}")
+        return EXIT_ERROR
+    print(f"JWT 指纹 : {r['fingerprint']}")
+    if r.get("expires_in"):
+        print(f"JWT 有效 : {r['expires_in'] / 3600:.1f} 小时")
+    if r.get("rt_expires_in"):
+        print(f"rt 有效  : {r['rt_expires_in'] / 86400:.1f} 天")
+    _note("（用 --relogin 可以跳过 rt、直接用密码重登一次）")
+    return EXIT_OK
+
+
+def cmd_sso_status(args):
+    """看看续期材料齐不齐、各还剩多久。**不打印任何明文凭证。**"""
+    config._load_all_dotenv()
+    from . import sso
+    print(f"落盘位置  : {config.user_dotenv()}")
+    print(f"secret    : {config.secret_path()}"
+          f"{'（存在）' if os.path.exists(config.secret_path()) else '（还没有）'}"
+          f"{' ← 来自环境变量 ' + config.ENV_SECRET if os.environ.get(config.ENV_SECRET) else ''}")
+
+    token = os.environ.get(config.ENV_TOKEN, "").strip()
+    if token:
+        valid, msg = config.check_token(token)
+        print(f"JWT       : 指纹 {config.fingerprint(token)}  {msg}")
+    else:
+        print("JWT       : (没有)")
+
+    rt = os.environ.get(config.ENV_RT, "")
+    rt_exp = config._int_env(config.ENV_RT_EXPIRE)
+    if rt:
+        left = (rt_exp - time.time()) / 86400 if rt_exp else None
+        print(f"rt        : 指纹 {config.fingerprint(rt)}  "
+              + (f"剩 {left:.1f} 天" if left is not None else "(无 rtExpire)"))
+    else:
+        print("rt        : (没有)")
+
+    print(f"账号      : {os.environ.get(config.ENV_ACCOUNT) or '(没有)'}")
+    print(f"密码      : "
+          f"{'已加密落盘' if os.environ.get(config.ENV_PASSWORD_ENC) else '(没有)'}")
+    print()
+    if config._has_credentials():
+        _note("自动续期：已启用（JWT 到期前 "
+              f"{config.REFRESH_MARGIN_SECONDS // 60} 分钟自动换新）")
+    else:
+        _note("自动续期：未启用——现在是「手动粘 JWT」模式，48 小时后要再粘一次。")
+        _note("要开启：run.sh sso login --account <邮箱>")
+    return EXIT_OK
+
+
+def cmd_sso_forget(args):
+    """删掉落盘的密码和 rt（只留 JWT）。**不带 --yes 只列不删。**"""
+    config._load_all_dotenv()
+    keys = [config.ENV_PASSWORD_ENC, config.ENV_RT, config.ENV_RT_EXPIRE,
+            config.ENV_ACCOUNT]
+    present = [k for k in keys if os.environ.get(k)]
+    if not present:
+        _note("落盘里没有密码/rt，不用删")
+        return EXIT_OK
+    if not args.yes:
+        print("以下字段**将被删除**（加 --yes 才真删）：")
+        for k in present:
+            v = os.environ.get(k, "")
+            masked = f"指纹 {config.fingerprint(v)}" if len(v) > 20 else v
+            print(f"  {k} = {masked}")
+        _note("")
+        _note("删掉之后自动续期就停了，退回「手动粘 JWT」模式（JWT 本身保留）。")
+        _note("确认无误后由**你自己**加 --yes 重跑。")
+        return EXIT_OK
+
+    path = config.user_dotenv()
+    lines = []
+    if os.path.exists(path):
+        with open(path, encoding="utf-8") as fh:
+            lines = fh.read().splitlines()
+    kept = [ln for ln in lines
+            if not ("=" in ln and ln.split("=", 1)[0].strip() in keys)]
+    config._write_atomic(path, "\n".join(kept) + "\n")
+    print(f"已从 {path} 删除：{', '.join(present)}")
+    _note("（JWT 本身保留，还能继续用，直到它过期。）")
+    return EXIT_OK
+
+
 def cmd_records(args):
     with _client(args) as cli:
         out = {}
@@ -1998,6 +2140,37 @@ def build_parser():
                    help="user=~/.config/unipus-aigc/.env（默认）；cwd=./.env")
     s.add_argument("--path", default=None, help="显式路径，给了就忽略 --scope")
     s.set_defaults(func=cmd_set_token)
+
+    # ---- sso：账号密码登录 / 自动续期（见 lib/unipus_aigc/sso.py）----
+    #
+    # 这一组是"凭证从哪来"的正解：给一次账号密码，之后 JWT 每 48 小时自动换新。
+    # 老的 `set-token`（手动粘 JWT）**保留不动**，两条路并存。
+    sp = sub.add_parser("sso", help="账号密码登录 / 凭证自动续期")
+    ssub = sp.add_subparsers(dest="subcmd", required=True)
+
+    s = ssub.add_parser("login", help="用账号密码登录，落盘 JWT + rt + 加密的密码")
+    s.add_argument("--account", required=True, help="AIGC 账号（邮箱）")
+    s.add_argument("--stdin", action="store_true",
+                   help="从标准输入读密码（**推荐**，避免进 ps 和 shell 历史）")
+    s.add_argument("--password", default=None,
+                   help="直接给密码。**不推荐**——会出现在 ps / shell 历史里")
+    s.add_argument("--scope", choices=["user", "cwd"], default="user",
+                   help="user=~/.config/unipus-aigc/.env（默认）；cwd=./.env")
+    s.add_argument("--path", default=None, help="显式路径，给了就忽略 --scope")
+    s.set_defaults(func=cmd_sso_login)
+
+    s = ssub.add_parser("refresh", help="强制续一次期（平时不用手动跑）")
+    s.add_argument("--relogin", action="store_true",
+                   help="跳过 rt，直接用密码重登一次")
+    s.set_defaults(func=cmd_sso_refresh)
+
+    s = ssub.add_parser("status", help="看续期材料齐不齐、各还剩多久")
+    s.set_defaults(func=cmd_sso_status)
+
+    s = ssub.add_parser("forget",
+                        help="删掉落盘的密码和 rt（只留 JWT）。不带 --yes 只列不删")
+    s.add_argument("--yes", action="store_true", help="确认删除")
+    s.set_defaults(func=cmd_sso_forget)
 
     s = sub.add_parser("records", help="列出历史记录")
     s.set_defaults(func=cmd_records)

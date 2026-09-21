@@ -38,6 +38,7 @@ from .client import SyncOutcome, UnipusAIGC
 from .constants import (Level, Operation, RecordType, SubType, TaskStatus,
                         norm_lang, norm_lang_short)
 from .errors import AigcError, MissingTokenError, StillRunning, TaskFailed, TaskTimeout
+from .sso import SsoError, encrypt_sso, login, refresh, needs_refresh
 from .kb_qa import KnowledgeBaseAPI
 from .article import (SUB_TYPES, TITLE_TYPES, TXT_TYPE, ArticleAPI, outline_markdown,
                       txt_struct)
@@ -91,6 +92,11 @@ __all__ = [
     "APPROVE_NO",
     "AigcError",
     "MissingTokenError",
+    "SsoError",
+    "encrypt_sso",
+    "login",
+    "refresh",
+    "needs_refresh",
     "StillRunning",
     "TaskFailed",
     "TaskTimeout",
