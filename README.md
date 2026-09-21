@@ -2,10 +2,10 @@
 
 `ai.unipus.cn`（Unipus AIGC 平台）的 **Claude Code plugin**。
 
-把平台上八个已跑通的 AIGC 应用——**文档/文本翻译、智能评阅（作文）、翻译评阅（译文打分）、
-口语评阅（朗读音频打分）、知识库问答（RAG）、语音合成（TTS）** 等——封装成 skills，
-让 Claude 能直接引导用户完成调用；底下是一个
-Python 客户端（`lib/unipus_aigc/`），**skill 是壳，Python 是手**。
+把平台上九个已跑通的 AIGC 应用——**文档/文本翻译、智能评阅（作文）、翻译评阅（译文打分）、
+口语评阅（朗读音频打分）、知识库问答（RAG）、语音合成（TTS）、智能出题、图像生成、
+文本生成（文章写作）**——封装成 skills，让 Claude 能直接引导用户完成调用；
+底下是一个 Python 客户端（`lib/unipus_aigc/`），**skill 是壳，Python 是手**。
 
 调用链**首选接口文档**（Confluence 55226315 / 64754844），逆向只做兜底：
 
@@ -78,6 +78,9 @@ python3 -m pip install -r requirements.txt
 | `oral-review` | 模型可自触发 | 口语评阅（朗读音频打分 + 发音反馈） |
 | `kb-qa` | 模型可自触发 | 知识库问答（RAG） |
 | `speech` | 模型可自触发 | 语音合成（文字转音频） |
+| `question-gen` | 模型可自触发 | 智能出题（阅读材料 → 出题 → 采纳） |
+| `image-gen` | 模型可自触发 | 图像生成（AI 绘画 / 文生图） |
+| `text-gen` | 模型可自触发 | 文本生成（标题 / 大纲 / 续写 / 改写 / 文章） |
 
 `guide` 带 `disable-model-invocation: true`，所以**模型看不见它、也无法代你触发**。
 这是有意的：它管凭证，不该在无关对话里被自动唤起。代价是"这个平台还能干什么"
@@ -139,6 +142,25 @@ bash skills/kb-qa/scripts/run.sh kb ask "暗号是什么？" --kb KBxxxxxxxx
 bash skills/speech/scripts/run.sh speech speakers                 # 可用音色
 bash skills/speech/scripts/run.sh speech say "要念的文字" --speaker zh_youyou --out ./a.mp3
 
+# 智能出题：建材料 → 出题 → 采纳 → 取题面（材料建了删不掉，能复用就复用）
+bash skills/question-gen/scripts/run.sh questions ploys            # 策略表
+bash skills/question-gen/scripts/run.sh questions materials        # 已有材料（含 generateCount）
+bash skills/question-gen/scripts/run.sh questions preview <rmId> --ploy 1011:2   # 试策略，不留残留
+bash skills/question-gen/scripts/run.sh questions generate <rmId> --ploy 1010:1  # 真出题
+bash skills/question-gen/scripts/run.sh questions json <rmId>      # 原文 + 题
+
+# 图像生成（AI 绘画）：**风格表要现取**，是必要不充分条件
+bash skills/image-gen/scripts/run.sh image styles                  # 白名单 + 每个风格的尺寸表
+bash skills/image-gen/scripts/run.sh image sizes general_v2.1_L    # 某风格的合法尺寸
+bash skills/image-gen/scripts/run.sh image draw "一只打盹的橘猫" --style general_v2.1_L --size 正方形
+bash skills/image-gen/scripts/run.sh image records                 # 记录（删记录用这行的 id）
+
+# 文本生成 / 文章写作：标题、大纲、续写、改写（**后三个是 SSE 流式**）
+bash skills/text-gen/scripts/run.sh article create --title "AI 与教育"     # -> articleId
+bash skills/text-gen/scripts/run.sh article title --article-id <id> -t 1  # 10 条标题
+bash skills/text-gen/scripts/run.sh article outline <id> --path a.txt     # markdown 大纲
+bash skills/text-gen/scripts/run.sh article continue <id> --start "…" --end "…"
+
 # 列出历史记录 / 清理测试数据（guide 域）
 bash skills/guide/scripts/run.sh records
 bash skills/guide/scripts/run.sh cleanup --ids <id> --yes
@@ -194,7 +216,10 @@ skills/
 ├── trans-review/ SKILL.md + scripts/run.sh
 ├── oral-review/ SKILL.md + scripts/run.sh
 ├── kb-qa/       SKILL.md + scripts/run.sh
-└── speech/      SKILL.md + scripts/run.sh
+├── speech/      SKILL.md + scripts/run.sh
+├── question-gen/ SKILL.md + scripts/run.sh
+├── image-gen/   SKILL.md + scripts/run.sh
+└── text-gen/    SKILL.md + scripts/run.sh
 lib/unipus_aigc/
 ├── config.py      主机地址、凭证读取与写入、JWT 解析
 ├── client.py      UnipusAIGC：请求头 + POST + 七牛上传 + socketId + 任务轮询
@@ -207,6 +232,9 @@ lib/unipus_aigc/
 ├── rag_v2.py      v2 RAG 面（会话 / 分块级溯源 / 流式问答）
 ├── sync_ops.py    同步 operation（11 / 13 / 14 / 15 / 17）
 ├── speech.py      语音合成（operation 9，标准异步链路）
+├── question_gen.py 智能出题（op12 + `rm/*` + `ques/*`）
+├── image_gen.py   AI 绘画（op10 + `img/*`；风格白名单现取，两级本地校验）
+├── article.py     文章写作 / 文本生成（`article/*` + `lm/*` 流式）
 ├── cli.py         命令行入口
 └── errors.py      AigcError / TaskFailed / TaskTimeout / StillRunning / MissingTokenError
 docs/call-chains.md    完整调用链（全部按文档实现；§0.1 是实测修正清单）
@@ -228,7 +256,8 @@ docs/agents/           本仓库自己的 agent 工作流约定
 跑通这套流程踩过的坑，写代码前值得先看一眼（细节见 docs/call-chains.md）。
 第 4 条是 2026-09-20 实测**纠正**过的，**第 5 条被纠正过两次**（09-20 一次、
 09-21 一次才定稿），都与本文件早先的说法相反；第 20 条是 2026-09-21 新增的；
-**第 22 条曾经是代码里一个待修的 bug，2026-09-21 已修并复验**。
+**第 22 条曾经是代码里一个待修的 bug，2026-09-21 已修并复验**；
+**第 24、25 条是同期落地的两个新应用**。
 
 1. **两个 API 域名都是对的，不是二选一。**
    `uaigc.unipus.cn`（逆向得来的）和 `aigc.unipus.cn`（接口文档里的）指向**同一个后端、
@@ -282,12 +311,20 @@ docs/agents/           本仓库自己的 agent 工作流约定
     **不等于** `taskId`，删记录要用 `id`。
 16. **接口文档给的 `submitData` 不一定还认。** AI 绘画（operation 10）的文档
     示例是 `{prompt, reversePrompt, style, size}`，`style` 注释点名
-    `manhua/youhua/xieshi/shuicai/gufeng/sd21`——**实测六个值里没有一个能出图**：
-    三个被平台静默改写成 `Dall-E-3` 然后 `taskStatus=4`，两个挂住不动。
-    只有 `general_v2.1_L`（丹青模型）真的回图，而它**不在文档列表里**。
-    **实时接口比文档准**：`img/getImgReferenceList` 才是风格白名单的真源，
-    它比文档多出 `sizeConf`（每个风格支持的尺寸）和 `styleType`。
-    另外 `size` **必填**（缺了直接 `code=100`），失败照样建记录。
+    `manhua/youhua/xieshi/shuicai/gufeng/sd21`——**实测这六个值提交后
+    没有一个是原样落地的**：三个被平台静默改写成 `Dall-E-3` 然后
+    `taskStatus=4`，两个改成"通用模型一/二"后挂住。只有 `general_v2.1_L`
+    （丹青模型）真的回图。
+    **但别把这件事读成"那六个不在白名单里"**（本文件早先这么写过，是错的）：
+    它们在。`img/getImgReferenceList` 回的线上白名单有 **11 行**，
+    那六个**都在里面**。真正的结论更精确也更有用——
+    **白名单是必要不充分条件：在表里只说明这个值是合法入参，不说明它会渲染。**
+    （这也解释了 `Dall-E-3` 的改写：`azure-dall-e-3` 本来就是白名单里的一行。）
+    **实时接口比文档准**：`getImgReferenceList` 比文档多出 `sizeConf`
+    （每个风格各自支持的尺寸）和 `styleType`。另外 `size` **必填**
+    （缺了直接 `code=100`，这一档不建记录），**失败照样建记录**（`taskStatus=4`
+    会留在 `img/queryList` 里），所以 CLI 在发请求前就按白名单挡住——
+    **别用"提交一下看报不报错"试 `style` / `size`**。
     详见 [docs/call-chains.md](docs/call-chains.md) §5。
 17. **知识库问答有两个 operation，只有 102 能用。** 接口文档的枚举表里
     "知识库问答-新"是 **16**，很容易顺手把 `Operation.KBQA` 改成它——**别改**。
@@ -299,11 +336,13 @@ docs/agents/           本仓库自己的 agent 工作流约定
     所以文档那套"续问"流程连第一步都喂不出来。
     16 现在叫 `Operation.KBQA_Doc` 并标注为**文档载但不可用**。
     详见 [docs/call-chains.md](docs/call-chains.md) §3。
-18. **"文档有值 ≠ 实测通"已经攒了五个反例。** 照文档实现新链路前先看一眼
-    [docs/call-chains.md](docs/call-chains.md) §5.1：op10（AI 绘画，文档给的
-    `style` 全被静默改写）、op12（智能出题，字段名确认了但拿不到真题模 `rmId`）、
+18. **"文档有值 ≠ 实测通"已经攒了五个反例**（外加一类不按 operation 编号的
+    `article/*` 写侧端点，见第 25 条）。照文档实现新链路前先看一眼
+    [docs/call-chains.md](docs/call-chains.md) §5.1：op10（AI 绘画，**已落地**，
+    但文档给的 `style` 会被平台改写，见第 16 条）、op12（智能出题，**已跑通**，见第 24 条）、
     op16（KBQA，见上条）、op18（文档问答，参数补到穷尽仍是 `code=100` /
-    `code=500` / `执行失败` 三条死路）、**op50（知识掌握总结，见第 21 条）**。
+    `code=500` / `执行失败` 三条死路）、**op50（知识掌握总结，见第 21 条）**、
+    **op43（AI模型翻译，`responseData` 恒为 `"{}"`，推送帧也是空的）**。
     文档是首选来源，但**不是免检**。
 19. **`queryTask` 的 status 枚举不是全集，而且不是所有 operation 都要轮询。**
     11 / 13 / 14 / 15 / 17 是**同步**的，结果就在 `submit` 的响应里，套
@@ -351,6 +390,51 @@ docs/agents/           本仓库自己的 agent 工作流约定
     曾经让这条路走不通。
     另外 op102 的 `submitData` 里 `source` 和 `networking` **服务端都不看**：
     带与不带返回完全一致，别再"两个都发"。
+24. **智能出题（op12）能跑了，但有四个坑。**（2026-09-21 全链路实测）
+    链路是 **`rm/create` 拿 `rmId` → op12 出题 → `ques/accept` 采纳 →
+    `ques/generationQuesJson` 取题面**。四条必须知道：
+
+    * **`rm/create` 回的是 `rmId`，不是文档写的 `id`**（`55226315` L2824 的字
+      段表写错）。文档里那个"差一个拿不到的 `rmId`"的老结论因此作废。
+    * **§2.1 `ques/generation` 是死路，别照它实现出题。** 它同步就回题面、
+      看着最省事，但**不落库、没有 `quesId`**，采纳不了——文档那张返回表是空的。
+      它只剩一个用处：**不留残留地试策略组合**（CLI 里是 `questions preview`）。
+    * **`rm/delete` 不存在，阅读材料建了就删不掉**（`rm` 只有
+      create/detail/update/list 四个端点）。**别为试参数随手建材料**，
+      要长期测试就复用同一条。
+    * **op12 不是每次都成功，且失败也建记录。** 同一个 `--ploy 1010:1`
+      一次通、一次 `status=4`。失败时 `ques/generationQuesList` 照样多一行
+      `pid`（ploy 列表为空）但 **`generateCount` 不加一**——判断成败看
+      `generateCount`，别数 `pid` 行。
+
+    另有字段名陷阱：记录里的代码字段叫 **`quesCode`** 不是 `code`（读错拿 `None`
+    且不报错）；`ques/generationQuesList` 在没有记录时抛 `code=1001`，
+    那是**正常空状态**不是故障。
+    详见 [docs/call-chains.md](docs/call-chains.md) §9。
+
+25. **`article/*` 里那三个"写侧"端点是空壳，真正在用的是 `lm/*`（SSE 流式）。**
+    （2026-09-21 实测）接口文档把 `article/aiTextOperation`（续写/扩写/优化）、
+    `article/aiOperation`（一级大纲/二级大纲/正文）、`article/aiOptimizeArticle`
+    的返回表写得很具体，**实测三个的 `value.content` 恒为 `null`，而且不看入参**：
+    给一个**根本不存在的 `articleId`** 打 `aiTextOperation`，
+    回来的是**逐字节相同**的 `{"content": null}`——跟第 21 条的 op50 是同一类。
+    **旁证是决定性的：前端产物里根本没有这三个端点**
+    （`uaigc_index.js` 有 `aiTitle` / `insertArticle` / `delete`，没有它们），
+    这是**第一例"文档写了、前端从没用过"**。所以别照文档实现它们。
+    **真正在用的是 `lm/*`**：`generate/outline` 是普通 JSON，
+    `content/continueWrite` / `content/commonContinueWrite` / `rewrite/content`
+    是 **SSE 流式**（`text/event-stream`，帧是
+    `data:{"choices":[{"delta":{"content":"…"}}]}`，`[DONE]` 收尾）。
+    **注意：这是 SSE over HTTP，不是 socket.io 推送**——上一版把文章写作记成
+    "要消费 Socket.IO 增量推送"，**那个猜测是错的**。
+    SSE 的响应头**不带 charset**，不把 `resp.encoding` 钉成 utf-8 中文会变成
+    `ä¸æ`（跟 v2 RAG 流式是同一个坑）。
+    另有两处**文档标 false、实测必填**：`getArticleList` 的 `templateType`、
+    `aiOptimizeArticle` 的 `tone`（后者所在端点本身是空壳）。
+    ⚠️ 还有一处**"不报错但结果错"**：`article/aiTitle` 的 `articleId` 不给也
+    "成功"、照样回 10 条标题，**但跟你的文章毫无关系**（同一篇文章，给了 id 出
+    「AI 如何重塑教育的未来」，不给则出「如何让生活更高效」这类泛标题）。
+    详见 [docs/call-chains.md](docs/call-chains.md) §10。
 
 ## 注意
 

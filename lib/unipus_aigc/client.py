@@ -96,6 +96,9 @@ class UnipusAIGC:
         from .trans_review import TransReviewAPI
         from .rag_v2 import RagV2API
         from .sync_ops import SyncAPI
+        from .question_gen import QuestionGenAPI
+        from .image_gen import ImageGenAPI
+        from .article import ArticleAPI
 
         self.translate = TranslateAPI(self)
         self.review = ReviewAPI(self)
@@ -105,6 +108,9 @@ class UnipusAIGC:
         self.trans_review = TransReviewAPI(self)
         self.rag_v2 = RagV2API(self)
         self.sync = SyncAPI(self)
+        self.question_gen = QuestionGenAPI(self)
+        self.image_gen = ImageGenAPI(self)
+        self.article = ArticleAPI(self)
         # 老链路叫 cli.kb，v2 叫 cli.kb_v2 更好记；两个名字指向同一个对象。
         self.kb_v2 = self.rag_v2
 
@@ -123,14 +129,17 @@ class UnipusAIGC:
     # ------------------------------------------------------------------
     # HTTP
     # ------------------------------------------------------------------
-    def post(self, path, payload=None, *, raw=False):
+    def post(self, path, payload=None, *, raw=False, headers=None):
         """POST 到业务 API。
 
         :param path: ``translate/create`` 这样的相对路径（也可写全 ``/api/aigc/...``）
         :param raw: True 时返回原始响应对象（用于下载二进制）
+        :param headers: 额外请求头（**会覆盖**同名默认头）。给
+            :class:`~unipus_aigc.ticket.TicketSession` 之类要换鉴权头的场景用。
         """
         url = path if path.startswith("http") else f"{config.API_BASE}/api/aigc/{path.lstrip('/')}"
-        resp = self.session.post(url, json=payload or {}, timeout=self.timeout)
+        resp = self.session.post(url, json=payload or {}, timeout=self.timeout,
+                                 headers=headers)
         if raw:
             resp.raise_for_status()
             return resp

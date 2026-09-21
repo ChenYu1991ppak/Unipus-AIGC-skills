@@ -1,7 +1,8 @@
 # -*- coding: utf-8 -*-
 """命令行入口。
 
-子命令按 skill 边界分组（guide / translate / review / kb / kbv2 / speech / oral / sync）::
+子命令按 skill 边界分组（guide / translate / review / kb / kbv2 / speech / oral /
+sync / questions）::
 
     # ---- guide 域：凭证与记录管理 ----
     unipus-aigc token                        # 检查 token 有效期
@@ -76,6 +77,24 @@
 一次前台阻塞调用必然超时、拿不到结果。拆成 submit（秒级返回 id）+ poll（短轮询、
 可反复调用）之后，中断也能重入——状态本来就记在平台上（``translate/list``、
 ``wm/list``），不需要我们自己存。
+
+``questions`` 是第九个域，``ploys`` 里那两套编号（策略 ``code`` 与材料
+``subType``）互不相通，别互相套用::
+
+    unipus-aigc questions ploys                       # 两套编号（策略 code / 材料 subType）
+    unipus-aigc questions materials                   # 阅读材料列表（**删不掉**，复用长期的）
+    unipus-aigc questions create-material --path a.txt   # 建材料，回 rmId
+    unipus-aigc questions preview <rmId> --ploy 1010:3   # §2.1 即时出题（**不落库**）
+    unipus-aigc questions generate <rmId> --ploy 1010:3  # op12 真出题，回 quesId
+    unipus-aigc questions accepted <rmId> / accept <quesId> / delete <quesId> [--yes]
+
+``image`` 是第十个域（AI 绘画 op10）。**它的 ``style`` / ``size`` 必须现取**，
+不能照文档抄，而且本地两级校验是硬要求——这条链路失败也建记录::
+
+    unipus-aigc image styles                  # 风格白名单（实时接口，也是 size 的真源）
+    unipus-aigc image sizes general_v2.1_L    # 某风格的合法尺寸
+    unipus-aigc image draw "提示词" --style general_v2.1_L --size 正方形
+    unipus-aigc image records / delete <id> [--yes]    # 删的是 img 表的 id，不是 taskId
 """
 
 import argparse
@@ -87,10 +106,13 @@ import time
 
 from . import config
 from .client import UnipusAIGC
+from .article import TITLE_TYPES, TXT_TYPE, txt_struct
 from .errors import AigcError, MissingTokenError, StillRunning, TaskFailed, TaskTimeout
 from .rag_v2 import KB_SOURCES, RagSession
 from .constants import Operation
 from .oral_review import DEFAULT_QUES_TYPE, OralReviewAPI
+from .image_gen import IMAGE_TYPES, KNOWN_GOOD_STYLE, ImageGenAPI, images_of
+from .question_gen import EDUCATION, PLOY_CODES, RM_SUBTYPE
 from .review import ReviewAPI
 from .speech import SpeechAPI
 from .sync_ops import SyncAPI
@@ -1342,6 +1364,615 @@ def cmd_kbv2_prompt(args):
 
 
 # ----------------------------------------------------------------------
+# questions —— 出题（阅读材料 -> 出题 -> 采纳）
+# ----------------------------------------------------------------------
+def _ploys_arg(raw):
+    """把 ``--ploy 1010:3`` / ``--ploy 1010=3`` 解析成 ``[{"code","count"}]``。
+
+    只给 ``1010`` 时 ``count`` 默认 1。**解析失败返回 None**，由调用方报用法错。
+    """
+    out = []
+    for item in raw or []:
+        text = str(item).strip()
+        for sep in (":", "="):
+            if sep in text:
+                code, _, count = text.partition(sep)
+                break
+        else:
+            code, count = text, "1"
+        code, count = code.strip(), count.strip()
+        if not code.isdigit() or not count.isdigit():
+            return None
+        out.append({"code": int(code), "count": int(count)})
+    return out
+
+
+def _question_text(args):
+    """题干正文：``--path`` 优先，其次 ``--text``，最后读 stdin。"""
+    if getattr(args, "path", None):
+        with open(args.path, encoding="utf-8") as fh:
+            return fh.read()
+    if getattr(args, "text", None):
+        return args.text
+    if not sys.stdin.isatty():
+        return sys.stdin.read()
+    return None
+
+
+def _print_material(row):
+    """``rm/list`` 的一行——``generateCount`` 是判断"这次出题落库没有"的凭据。"""
+    ploys = row.get("acceptQuestionPloyList") or []
+    detail = ",".join(
+        f"{p.get('code')}x{p.get('count')}/采纳{p.get('acceptCount')}"
+        for p in ploys if isinstance(p, dict))
+    print(f"{row.get('rmId') or row.get('id')}\t"
+          f"{(row.get('content') or '')[:40].replace(chr(10), ' ')}\t"
+          f"出题{row.get('generateCount')}\t{detail}")
+
+
+def cmd_questions_ploys(args):
+    """列出两套**互不相通**的编号：策略 code 与材料 subType。"""
+    print("questionPloyList 的 code（§2.1 / op12 用）：")
+    for code, name in sorted(PLOY_CODES.items()):
+        print(f"  {code:<6}{name}")
+    print()
+    print("rm/create 的 subType（建阅读材料用）：")
+    for value, name in sorted(RM_SUBTYPE.items()):
+        print(f"  {value:<6}{name}")
+    print()
+    print("education：")
+    for value, name in sorted(EDUCATION.items()):
+        print(f"  {value:<6}{name}")
+    _note("")
+    _note("注：这两套编号**不是一套**，别互相套用；op37（智能出排序题）还有")
+    _note("第三套 code（1014 / 1024 / 1034），也不通用。")
+    return EXIT_OK
+
+
+def cmd_questions_materials(args):
+    """§1.4 阅读材料列表。"""
+    with _client(args) as cli:
+        rows = cli.question_gen.materials(page_num=args.page, page_size=args.size)
+    print(f"共 {len(rows)} 条")
+    for row in rows:
+        _print_material(row)
+    return EXIT_OK
+
+
+def cmd_questions_material(args):
+    """§1.2 阅读材料详情。"""
+    with _client(args) as cli:
+        value = cli.question_gen.material(args.rm_id)
+    print(_dump(value))
+    return EXIT_OK
+
+
+def cmd_questions_create_material(args):
+    """§1.1 建阅读材料，回 ``rmId``。
+
+    **这个动作不可逆**——``rm/delete`` 不存在，建完就删不掉了，所以正文由
+    调用方显式给（``--path`` / ``--text`` / stdin），并且落库前把正文长度
+    和去向打在 stderr 上。
+    """
+    content = _question_text(args)
+    if not content:
+        _note("需要 --path 或 --text（或从 stdin 读正文）")
+        return 2
+    if not 1 <= args.education <= 10:
+        _note("--education 超出文档给的区间 1~10")
+        return 2
+    _note(f"[即将落库] education={args.education}({EDUCATION.get(args.education, '?')}) "
+          f"subType={args.sub_type}({RM_SUBTYPE.get(args.sub_type, '?')}) "
+          f"正文 {len(content)} 字")
+    _note("[提醒] rm/delete 不存在，**这条材料之后删不掉**。建议复用一条长期的。")
+    with _client(args) as cli:
+        rm_id = cli.question_gen.create_material(content, education=args.education,
+                                                 sub_type=args.sub_type)
+    print(rm_id)
+    return EXIT_OK
+
+
+def cmd_questions_update_material(args):
+    """§1.3 改阅读材料。只发显式给出的字段——**不搞"两个都发"**。"""
+    fields = {}
+    if args.content is not None:
+        fields["content"] = args.content
+    if args.education is not None:
+        fields["education"] = args.education
+    if args.word_count is not None:
+        fields["wordCount"] = args.word_count
+    if args.tag is not None:
+        fields["tag"] = args.tag
+    if not fields:
+        _note("没有要改的字段（--content / --education / --word-count / --tag）")
+        return 2
+    with _client(args) as cli:
+        print(_dump(cli.question_gen.update_material(args.rm_id, **fields)))
+    return EXIT_OK
+
+
+def cmd_questions_preview(args):
+    """§2.1 即时出题：**不落库、没有 quesId，题采纳不了**。"""
+    ploys = _ploys_arg(args.ploy or ["1010:3"])
+    if ploys is None:
+        _note("--ploy 写法是 `1010:3`（默认 1010:3）")
+        return 2
+    with _client(args) as cli:
+        items = cli.question_gen.preview(args.rm_id, ploys, level=args.level)
+    print(f"共 {len(items)} 题")
+    for item in items:
+        print(f"  [{item.get('code')}] {item.get('quesText') or item.get('ques')}")
+    _note("")
+    _note("注：这一路**服务端不留记录**——`generationQuesList` 仍报 1001，")
+    _note("`rm/list` 的 generateCount 也不动，而且**没有 quesId，题无法采纳**。")
+    _note("要真出题（能采纳的）用 `questions generate`。")
+    return EXIT_OK
+
+
+def cmd_questions_generate(args):
+    """op12 真出题：落库、每题带 ``quesId``，这个 id 才是采纳要的 ``questionId``。"""
+    ploys = _ploys_arg(args.ploy)
+    if ploys is None:
+        _note("--ploy 写法是 `1010:3`")
+        return 2
+    if not ploys:
+        _note("--ploy 必填（如 `--ploy 1010:3`）；列策略用 `questions ploys`")
+        return 2
+    _note("[提醒] 这条会落库：`rm/list` 的 generateCount 会加一，材料删不掉。")
+    with _client(args) as cli:
+        questions, task_id = cli.question_gen.generate(
+            args.rm_id, ploys, level=args.level,
+            interval=args.interval, timeout=args.wait)
+    print(f"共 {len(questions)} 题   taskId={task_id}")
+    for q in questions:
+        print(f"  quesId={q.get('quesId')}  [{q.get('code')}] {q.get('ques')}")
+    _note("")
+    _note("采纳用 `questions accept <quesId>`——**不是 code、也不是 rmId**。")
+    p = _save_result("questions-op12", task_id, questions)
+    if p:
+        _note(f"[原始 JSON] {p}")
+    return EXIT_OK
+
+
+def cmd_questions_records(args):
+    """§2.2 出题历史列表。行 = ``{pid, acceptQuestionPloyList, created}``。"""
+    with _client(args) as cli:
+        rows = cli.question_gen.records(args.rm_id)
+    if not rows:
+        print("(还没有出题记录)")
+        _note("注：这是**正常空态**（接口报 1001 没有生成题目记录），不是失败。")
+        return EXIT_OK
+    print(f"共 {len(rows)} 次")
+    for row in rows:
+        ploys = ",".join(f"{p.get('code')}x{p.get('count')}"
+                         for p in (row.get("acceptQuestionPloyList") or [])
+                         if isinstance(p, dict))
+        print(f"  pid={row.get('pid')}\t{row.get('created')}\t{ploys}")
+    return EXIT_OK
+
+
+def cmd_questions_record(args):
+    """§2.6 / §2.7：按 ``rmId`` 取最新一次，或按 ``pid`` 取指定一次。"""
+    with _client(args) as cli:
+        if args.rm_id:
+            items = cli.question_gen.last_record(args.rm_id)
+        else:
+            items = cli.question_gen.record(args.pid)
+    print(f"共 {len(items)} 题")
+    for q in items:
+        if isinstance(q, dict):
+            # 这一档的字段名是 **quesCode**（op12 那条链路里叫 code）。
+            print(f"  quesId={q.get('quesId')}  [{q.get('quesCode')}] "
+                  f"采纳={q.get('accept')}  {q.get('quesText') or q.get('ques')}")
+        else:
+            print(f"  {q}")
+    if args.json:
+        print(_dump(items))
+    return EXIT_OK
+
+
+def cmd_questions_accepted(args):
+    """§2.5 采纳题目列表——「我采纳了哪些」以这个为准。"""
+    with _client(args) as cli:
+        rows = cli.question_gen.accepted(args.rm_id)
+    if not rows:
+        print("(还没有采纳任何题目)")
+        return EXIT_OK
+    print(f"共 {len(rows)} 题")
+    for q in rows:
+        # 这一档字段名是 quesCode（不是 code），采纳标记是 accept。
+        print(f"  quesId={q.get('quesId')}  [{q.get('quesCode')}] "
+              f"采纳={q.get('accept')}  {q.get('quesText') or q.get('ques')}")
+    return EXIT_OK
+
+
+def cmd_questions_accept(args):
+    """§2.3 采纳 / §2.8 取消采纳。"""
+    with _client(args) as cli:
+        if args.cancel:
+            value = cli.question_gen.cancel_accept(args.question_id)
+            _note("[取消采纳] 已撤销")
+        else:
+            value = cli.question_gen.accept(args.question_id)
+    print(f"-> {value}")
+    return EXIT_OK
+
+
+def cmd_questions_json(args):
+    """§2.9 题目 json 结构：「原文 + 采纳的题」拼成的树。"""
+    with _client(args) as cli:
+        data = cli.question_gen.questions_json(args.rm_id)
+    print(_dump(data))
+    return EXIT_OK
+
+
+def cmd_questions_answer(args):
+    """§3.1 答题。题干用 ``--path`` / ``--text``。"""
+    text = _question_text(args)
+    if not text:
+        _note("需要 --path 或 --text（或从 stdin 读题干）")
+        return 2
+    with _client(args) as cli:
+        print(_dump(cli.question_gen.answer(args.rm_id, text)))
+    return EXIT_OK
+
+
+def cmd_questions_delete(args):
+    """§2.4 删题目（按 ``quesId``）。**不带 ``--yes`` 只列不删。**
+
+    这是出题侧唯一的删除手段，也**只能删题目**——阅读材料（``rmId``）
+    没有对应的删除接口，删不掉。
+    """
+    with _client(args) as cli:
+        targets = {qid: None for qid in args.question_ids}
+        for rm_id in args.rm_id or []:
+            for q in cli.question_gen.accepted(rm_id):
+                qid = str(q.get("quesId"))
+                targets.setdefault(qid, f"rmId={rm_id} 已采纳")
+        if not targets:
+            _note("没找到要删的题目")
+            return EXIT_OK
+        if not args.yes:
+            print("以下题目**将被删除**（加 --yes 才真删）：")
+            for qid, why in targets.items():
+                print(f"  quesId={qid}{('  ' + why) if why else ''}")
+            _note("")
+            _note("确认无误后由**你自己**加 --yes 重跑。")
+            _note("注：删的是题目本身，阅读材料删不掉（rm/delete 不存在）。")
+            return EXIT_OK
+        for qid in targets:
+            print(f"quesId={qid} -> {cli.question_gen.delete(qid)}")
+    return EXIT_OK
+
+
+# ----------------------------------------------------------------------
+# image —— AI 绘画（operation 10）
+# ----------------------------------------------------------------------
+def cmd_image_styles(args):
+    """风格白名单。**这是 ``style`` / ``size`` 的真源**，不是接口文档。"""
+    with _client(args) as cli:
+        refs = cli.image_gen.references(refresh=args.refresh)
+    print(ImageGenAPI.style_table(refs))
+    print()
+    _note("来源：img/getImgReferenceList（无参、只读）。**实时接口比文档准**——")
+    _note("文档只给了 6 个风格名、没给尺寸，也没给 styleType。")
+    _note("")
+    _note("⚠️ **在白名单里 ≠ 能出图。** 文档点名的那六个（manhua/youhua/xieshi/")
+    _note("shuicai/gufeng/sd21）**都在**上面这张表里，但提交它们平台会静默改写成")
+    _note("azure-dall-e-3 / sd21 / playground，然后失败或挂住。实测出图的是")
+    _note(f"{KNOWN_GOOD_STYLE}（丹青模型，尺寸表也最宽）。")
+    return EXIT_OK
+
+
+def cmd_image_sizes(args):
+    """某个风格的合法尺寸。尺寸**跟着风格走**，不是一张全局表。"""
+    with _client(args) as cli:
+        api = cli.image_gen
+        try:
+            known = api.check(args.style)      # 风格不在白名单 -> ValueError -> 退出码 2
+        except ValueError as e:
+            _note(f"本地校验未通过（**没有发请求**）：{e}")
+            return 2
+        sizes = api.sizes_of(args.style)
+    print(f"{args.style}（{known.name} / {known.style_type}）支持的尺寸：")
+    for s in sizes:
+        print(f"  {s}")
+    _note("注：`size` 硬必填，缺了报 `code=100 size字段不能为空`（这条失败不建记录）。")
+    return EXIT_OK
+
+
+def cmd_image_draw(args):
+    """提交出图 + 等待。**本地两级校验不过就退出码 2，不发请求。**
+
+    这条链路**失败也照样建记录**（``taskStatus=4`` 的行在 ``img/queryList`` 里
+    看得见、``imgList`` 为 null），所以"提交一下看报不报错"是坏策略。
+    """
+    with _client(args) as cli:
+        try:
+            task_id = cli.image_gen.draw(
+                args.prompt, args.style, args.size,
+                reverse_prompt=args.reverse_prompt, img_number=args.img_number)
+        except ValueError as e:
+            _note(f"本地校验未通过（**没有发请求**）：{e}")
+            return 2
+        _note(f"[已提交] taskId={task_id}  style={args.style} size={args.size}")
+        _note("注意：这条链路**失败也建记录**，所以下面等不到图时请如实记账，")
+        _note("别重试着试参数——那只会多留几条 taskStatus=4。")
+        images = cli.image_gen.wait(task_id, interval=args.interval, timeout=args.wait)
+    result = {"taskId": task_id, "imgList": images}
+    print(ImageGenAPI.format_result(result) if not args.json
+          else _dump(result))
+    p = _save_result("image-op10", task_id, result)
+    if p:
+        _note(f"[原始 JSON] {p}")
+    return EXIT_OK
+
+
+def cmd_image_submit(args):
+    """只提交，秒级返回 taskId。同样先过本地校验。"""
+    with _client(args) as cli:
+        try:
+            task_id = cli.image_gen.draw(
+                args.prompt, args.style, args.size,
+                reverse_prompt=args.reverse_prompt, img_number=args.img_number)
+        except ValueError as e:
+            _note(f"本地校验未通过（**没有发请求**）：{e}")
+            return 2
+    print(f"taskId={task_id}")
+    _note("查结果：`image poll <taskId>`（还在跑时退出码 3，不是错误）。")
+    _note("**删不掉任务，只能删记录**：出图后从 `image records` 拿 img 表的 id。")
+    return EXIT_OK
+
+
+def cmd_image_poll(args):
+    """短轮询：没出图就是退出码 3。"""
+    with _client(args) as cli:
+        images = cli.image_gen.poll(args.task_id, interval=args.interval,
+                                    timeout=args.wait)
+    result = {"taskId": args.task_id, "imgList": images}
+    print(ImageGenAPI.format_result(result) if not args.json else _dump(result))
+    return EXIT_OK
+
+
+def cmd_image_get(args):
+    """只查一次，不轮询。"""
+    with _client(args) as cli:
+        data = cli.image_gen.get(args.task_id)
+    if data is None:
+        _note("还在跑（没有出图结果）")
+        return EXIT_STILL_RUNNING
+    print(_dump(data) if args.json else ImageGenAPI.format_result(
+        {"taskId": args.task_id, "imgList": images_of(data)}))
+    return EXIT_OK
+
+
+def cmd_image_records(args):
+    """``img/queryList``。``--type 1`` 是 AI 绘画生图历史。"""
+    with _client(args) as cli:
+        value = cli.image_gen.records(args.type, page=args.page, size=args.size)
+    rows = value if isinstance(value, list) else (value or {}).get("data") or []
+    print(f"共 {len(rows)} 条（type={args.type} {IMAGE_TYPES.get(args.type, '?')}）")
+    for row in rows:
+        if isinstance(row, dict):
+            print(f"  id={row.get('id')}\ttaskStatus={row.get('taskStatus')}\t"
+                  f"{row.get('style') or ''}\t{(row.get('prompt') or '')[:30]}")
+        else:
+            print(f"  {row}")
+    _note("")
+    _note("删这条用 **id**（img 表的 id），**不是 taskId**——拿错删不掉还看不出来。")
+    _note("taskStatus=4 的行是失败留下的垃圾记录（imgList 为 null）。")
+    return EXIT_OK
+
+
+def cmd_image_delete(args):
+    """``img/delete``。**不带 ``--yes`` 只列不删。**"""
+    with _client(args) as cli:
+        targets = list(args.img_ids)
+        if not targets and args.failed:
+            value = cli.image_gen.records(1, page=1, size=args.scan)
+            rows = value if isinstance(value, list) else (value or {}).get("data") or []
+            targets = [str(r.get("id")) for r in rows
+                       if isinstance(r, dict) and r.get("taskStatus") == 4]
+            if not targets:
+                _note("没有 taskStatus=4 的垃圾记录")
+                return EXIT_OK
+        if not targets:
+            _note("需要给至少一个 id（img 表的 id，从 `image records` 拿）")
+            return 2
+        if not args.yes:
+            print("以下绘画记录**将被删除**（加 --yes 才真删）：")
+            for img_id in targets:
+                print(f"  id={img_id}")
+            _note("")
+            _note("确认无误后由**你自己**加 --yes 重跑。")
+            _note("注：**只有 `img/delete` 能收干净**，但拿错 id（比如传 taskId）")
+            _note("接口不报错、记录还在——删完请用 `image records` 复核一次。")
+            return EXIT_OK
+        for img_id in targets:
+            print(f"id={img_id} -> {cli.image_gen.delete(img_id)}")
+    return EXIT_OK
+
+
+# ----------------------------------------------------------------------
+# article —— 文章写作 / 文本生成
+# ----------------------------------------------------------------------
+def cmd_article_create(args):
+    """`article/insertArticle`：建文章，只需要一个时间戳。"""
+    with _client(args) as cli:
+        aid = cli.article.create(title=args.title, content=args.content)
+    print(aid)
+    _note("[提醒] 这条链路**能删干净**（`article/delete` 存在），但要先记下这个 id。")
+    _note(f"删除： run.sh article delete {aid}   （不带 --yes 只列不删）")
+    return EXIT_OK
+
+
+def cmd_article_detail(args):
+    with _client(args) as cli:
+        print(_dump(cli.article.detail(args.article_id)))
+    return EXIT_OK
+
+
+def cmd_article_list(args):
+    with _client(args) as cli:
+        rows = cli.article.articles(template_type=args.template_type,
+                                    page_num=args.page, page_size=args.size)
+    print(f"共 {len(rows)} 条")
+    for row in rows:
+        if isinstance(row, dict):
+            print(f"  {row.get('articleId')}\t{(row.get('title') or '')[:30]}\t"
+                  f"版本{row.get('versionSize')}")
+        else:
+            print(f"  {row}")
+    _note("注：`templateType` **是必填的**（文档标 false，实测不给报 code=100）。")
+    return EXIT_OK
+
+
+def cmd_article_update(args):
+    """`article/updateArticle`。**`submitTime` 是必填**（文档明说会校验）。"""
+    content = args.content
+    if args.path:
+        with open(args.path, encoding="utf-8") as fh:
+            content = fh.read()
+    if args.title is None:
+        _note("需要 --title（文档标必填）")
+        return 2
+    with _client(args) as cli:
+        print(cli.article.update(args.article_id, args.title, content=content))
+    return EXIT_OK
+
+
+def cmd_article_delete(args):
+    """`article/delete`。**不带 ``--yes`` 只列不删。**"""
+    if not args.yes:
+        with _client(args) as cli:
+            try:
+                d = cli.article.detail(args.article_id)
+            except AigcError as e:
+                _note(f"查不到这篇文章：{e}")
+                return EXIT_ERROR
+        print(f"以下文章**将被删除**（加 --yes 才真删）：")
+        print(f"  articleId={args.article_id}  title={d.get('title')!r}  "
+              f"版本数={d.get('versionSize')}")
+        _note("")
+        _note("确认无误后由**你自己**加 --yes 重跑。")
+        _note("注：删的是**该文章的所有版本**，不是只删当前版本。")
+        return EXIT_OK
+    with _client(args) as cli:
+        print("delete ->", cli.article.delete(args.article_id))
+    return EXIT_OK
+
+
+def cmd_article_title(args):
+    """`article/aiTitle`：生成标题，回 10 条。"""
+    content = None
+    if args.path:
+        with open(args.path, encoding="utf-8") as fh:
+            content = [txt_struct(fh.read(), args.type)]
+    elif args.text:
+        content = [txt_struct(args.text, args.type)]
+    with _client(args) as cli:
+        titles = cli.article.ai_title(args.title_type, article_id=args.article_id,
+                                      title=args.old_title, content=content)
+    if not titles:
+        print("(没有返回标题)")
+        return EXIT_OK
+    for t in titles:
+        print(t)
+    _note("")
+    _note(f"`aiTitleType`：{'；'.join(f'{k}={v}' for k, v in sorted(TITLE_TYPES.items()))}")
+    _note(f"`TxtStruct.type`：{'；'.join(f'{k}={v}' for k, v in sorted(TXT_TYPE.items()))}"
+          f"（`--type` 默认 T 正文）")
+    _note("⚠️ **`--article-id` 建议一定要给。** 不给自己一条都不报错，但出的标题")
+    _note("跟你的文章无关（实测：同一篇文章，不给 id 时回的是「如何让生活更高效」")
+    _note("这类泛标题）。文档说 1/2/3 三种都要传，**它是对的**。")
+    _note("`-t 2` 另需 `--old-title`，`-t 3` 另需正文。")
+    return EXIT_OK
+
+
+def cmd_article_outline(args):
+    """`lm/generate/outline`：按正文生成大纲（**普通 JSON，不是流式**）。"""
+    text = _question_text(args)
+    if not text:
+        _note("需要 --path 或 --text（或从 stdin 读正文）")
+        return 2
+    with _client(args) as cli:
+        md = cli.article.outline(args.article_id, text)
+    print(md)
+    _note("")
+    _note("注：这个是 `lm/*` 那一族里**唯一非流式**的；返回是 markdown 文本。")
+    return EXIT_OK
+
+
+def cmd_article_continue(args):
+    """`lm/content/continueWrite`：在 start 和 end 之间续写（**SSE 流式**）。"""
+    start = args.start
+    end = args.end
+    if args.start_path:
+        with open(args.start_path, encoding="utf-8") as fh:
+            start = fh.read()
+    if args.end_path:
+        with open(args.end_path, encoding="utf-8") as fh:
+            end = fh.read()
+    if start is None or end is None:
+        _note("需要 --start 和 --end（或 --start-path / --end-path）")
+        return 2
+    with _client(args) as cli:
+        if args.json:
+            chunks = list(cli.article.continue_write(
+                args.article_id, start, end, custom_prompt=args.prompt,
+                timeout=args.wait))
+            print(_dump({"chunks": chunks, "text": "".join(chunks)}))
+        elif args.raw:
+            for chunk in cli.article.continue_write(
+                    args.article_id, start, end, custom_prompt=args.prompt,
+                    timeout=args.wait):
+                sys.stdout.write(chunk)
+                sys.stdout.flush()
+            print()
+        else:
+            print(cli.article.continue_write_text(
+                args.article_id, start, end, custom_prompt=args.prompt,
+                timeout=args.wait))
+    return EXIT_OK
+
+
+def cmd_article_common_continue(args):
+    """`lm/content/commonContinueWrite`：**不依赖文章**的通用续写（SSE）。"""
+    if args.before is None and args.after is None:
+        _note("需要 --before 和/或 --after")
+        return 2
+    with _client(args) as cli:
+        text = cli.article.common_continue_text(
+            args.subtype, before=args.before, after=args.after, timeout=args.wait)
+    print(text)
+    _note("")
+    _note(f"注：`subType={args.subtype}` 是前端在用的那个值（实测能出文本）。")
+    return EXIT_OK
+
+
+def cmd_article_rewrite(args):
+    """`lm/rewrite/content`：按方法改写（SSE）。"""
+    content = args.content
+    if args.path:
+        with open(args.path, encoding="utf-8") as fh:
+            content = fh.read()
+    if not content:
+        _note("需要 --content 或 --path")
+        return 2
+    full = args.full or content
+    with _client(args) as cli:
+        text = cli.article.rewrite_text(
+            args.article_id, content, rewrite_method_id=args.method,
+            sub_type=args.subtype, type_=args.type, full_content=full,
+            custom_prompt=args.prompt, timeout=args.wait)
+    print(text)
+    _note("")
+    _note(f"注：`--method {args.method}`；`fullContent` 不给会报 `code=100 文章内容不能为空`，")
+    _note("所以这里默认用 `--content` 顶上（前端是两个都给）。")
+    return EXIT_OK
+
+
+# ----------------------------------------------------------------------
 # parser
 # ----------------------------------------------------------------------
 def _add_wait(s, default, help="轮询上限（秒）。到点未完成则退出码 3，不是错误"):
@@ -1660,6 +2291,277 @@ def build_parser():
     s.add_argument("task_id", metavar="taskId")
     _add_wait(s, 60)
     s.set_defaults(func=cmd_sync_poll)
+
+    # ---- questions —— 出题（阅读材料 -> 出题 -> 采纳）----
+    #
+    # 和 sync 那组的分工：这里只有 op12（出题）走 task/submit + 轮询，
+    # 其余全是普通 HTTP。**§2.1 的 `ques/generation` 不落库、没有 quesId**，
+    # 所以它单独一个 `preview` 子命令，不跟 `generate` 混。
+    qp = sub.add_parser("questions", help="出题（阅读材料 -> 出题 -> 采纳）")
+    qsub = qp.add_subparsers(dest="subcmd", required=True)
+
+    s = qsub.add_parser("ploys", help="列出策略 code 与材料 subType 两套编号")
+    s.set_defaults(func=cmd_questions_ploys)
+
+    s = qsub.add_parser("materials", help="阅读材料列表（§1.4）")
+    s.add_argument("--page", type=int, default=1)
+    s.add_argument("--size", type=int, default=20)
+    s.set_defaults(func=cmd_questions_materials)
+
+    s = qsub.add_parser("material", help="阅读材料详情（§1.2）")
+    s.add_argument("rm_id", metavar="rmId")
+    s.set_defaults(func=cmd_questions_material)
+
+    s = qsub.add_parser("create-material",
+                        help="建阅读材料（§1.1）。**建了就删不掉，别随手建**")
+    s.add_argument("--path", default=None, help="正文文件路径")
+    s.add_argument("--text", default=None, help="正文，直接给字符串")
+    s.add_argument("--education", type=int, default=5,
+                   help="教育阶段 1~10，默认 5 本科；`questions ploys` 看全量")
+    s.add_argument("--sub-type", type=int, default=5,
+                   help="材料类型，出题场景 5 智能出题；`questions ploys` 看全量")
+    s.set_defaults(func=cmd_questions_create_material)
+
+    s = qsub.add_parser("update-material", help="改阅读材料（§1.3），只发给出的字段")
+    s.add_argument("rm_id", metavar="rmId")
+    s.add_argument("--content", default=None, help="新正文")
+    s.add_argument("--education", type=int, default=None)
+    s.add_argument("--word-count", dest="word_count", type=int, default=None)
+    s.add_argument("--tag", default=None)
+    s.set_defaults(func=cmd_questions_update_material)
+
+    s = qsub.add_parser("preview",
+                        help="§2.1 即时出题：**不落库、没有 quesId，题采纳不了**")
+    s.add_argument("rm_id", metavar="rmId")
+    s.add_argument("--ploy", action="append", metavar="CODE[:N]",
+                   help="出题策略，如 1010:3；可重复。默认 1010:3")
+    s.add_argument("--level", type=int, default=0, help="难度，默认 0")
+    s.set_defaults(func=cmd_questions_preview)
+
+    s = qsub.add_parser("generate", help="op12 真出题：落库、每题带 quesId")
+    s.add_argument("rm_id", metavar="rmId")
+    s.add_argument("--ploy", action="append", metavar="CODE[:N]",
+                   help="出题策略，如 1010:3；可重复。**必填**")
+    s.add_argument("--level", type=int, default=0)
+    s.add_argument("--interval", type=int, default=3, help="轮询间隔（秒）")
+    _add_wait(s, 180, help="轮询上限（秒）。到点未完成则退出码 3，不是错误")
+    s.set_defaults(func=cmd_questions_generate)
+
+    s = qsub.add_parser("records", help="出题历史列表（§2.2）")
+    s.add_argument("rm_id", metavar="rmId")
+    s.set_defaults(func=cmd_questions_records)
+
+    s = qsub.add_parser("record", help="某一次/最新一次出的题（§2.6 / §2.7）")
+    g = s.add_mutually_exclusive_group(required=True)
+    g.add_argument("--rm-id", dest="rm_id", metavar="rmId", help="最新一次")
+    g.add_argument("--pid", metavar="pid", help="指定一次，id 从 records 拿")
+    s.add_argument("--json", action="store_true")
+    s.set_defaults(func=cmd_questions_record)
+
+    s = qsub.add_parser("accepted", help="采纳题目列表（§2.5）")
+    s.add_argument("rm_id", metavar="rmId")
+    s.set_defaults(func=cmd_questions_accepted)
+
+    s = qsub.add_parser("accept", help="采纳题目（§2.3）。**id 是 quesId**")
+    s.add_argument("question_id", metavar="quesId")
+    s.add_argument("--cancel", action="store_true", help="改成取消采纳（§2.8）")
+    s.set_defaults(func=cmd_questions_accept)
+
+    s = qsub.add_parser("json", help="题目 json 结构（§2.9）。需已有采纳的题")
+    s.add_argument("rm_id", metavar="rmId")
+    s.set_defaults(func=cmd_questions_json)
+
+    s = qsub.add_parser("answer", help="答题（§3.1）")
+    s.add_argument("rm_id", metavar="rmId")
+    s.add_argument("--path", default=None, help="题干文件路径")
+    s.add_argument("--text", default=None, help="题干，直接给字符串")
+    s.set_defaults(func=cmd_questions_answer)
+
+    s = qsub.add_parser("delete",
+                        help="删题目（§2.4，按 quesId）。不带 --yes 只列不删")
+    s.add_argument("question_ids", nargs="*", metavar="quesId")
+    s.add_argument("--rm-id", dest="rm_id", action="append", metavar="rmId",
+                   help="顺带删这个材料下**已采纳**的题；可重复")
+    s.add_argument("--yes", action="store_true", help="确认删除")
+    s.set_defaults(func=cmd_questions_delete)
+
+    # ---- article —— 文章写作 / 文本生成 ----
+    #
+    # 两个重要口径（都是实测，别照文档抄）：
+    #   1. `article/aiTextOperation` / `aiOperation` / `aiOptimizeArticle`
+    #      这三个**文档写了但实测恒回 content: null**，而且不看入参
+    #      （不存在的 articleId 也回逐字节相同的空壳）。前端产物里根本搜不到
+    #      它们。**所以这里不提供子命令**——提供了只会给用户一个永远为空的字段。
+    #   2. 真正在用的一族是 `lm/*`，**而且它是 SSE 流式**（不是 socket.io 推送）。
+    #      三个流式 + 一个普通 JSON（outline）。
+    ap = sub.add_parser("article", aliases=["art"],
+                        help="文章写作 / 文本生成（article/* + lm/*）")
+    asub = ap.add_subparsers(dest="subcmd", required=True)
+
+    s = asub.add_parser("create", help="建文章（`insertArticle`，只要一个时间戳）")
+    s.add_argument("--title", default=None)
+    s.add_argument("--content", default=None)
+    s.set_defaults(func=cmd_article_create)
+
+    s = asub.add_parser("detail", help="文章详情（`queryArticleDetail`）")
+    s.add_argument("article_id", metavar="articleId")
+    s.set_defaults(func=cmd_article_detail)
+
+    s = asub.add_parser("list", help="文章列表（`getArticleList`）")
+    s.add_argument("--template-type", dest="template_type", type=int, default=0,
+                   help="**必填**（文档标 false，实测不给报 code=100）。"
+                        "0 推文（默认） / 1 教学 / 2 营销 / 3 办公")
+    s.add_argument("--page", type=int, default=1)
+    s.add_argument("--size", type=int, default=20)
+    s.set_defaults(func=cmd_article_list)
+
+    s = asub.add_parser("update", help="改文章（`updateArticle`，submitTime 必填）")
+    s.add_argument("article_id", metavar="articleId")
+    s.add_argument("--title", default=None, help="**必填**（文档标 true）")
+    s.add_argument("--content", default=None)
+    s.add_argument("--path", default=None, help="正文文件路径，优先于 --content")
+    s.set_defaults(func=cmd_article_update)
+
+    s = asub.add_parser("delete",
+                        help="删文章（`article/delete`，**能删干净**）。"
+                             "不带 --yes 只列不删")
+    s.add_argument("article_id", metavar="articleId")
+    s.add_argument("--yes", action="store_true", help="确认删除")
+    s.set_defaults(func=cmd_article_delete)
+
+    s = asub.add_parser("title", help="生成标题（`aiTitle`，回 10 条）")
+    s.add_argument("--article-id", dest="article_id", default=None,
+                   help="文章 id；**不给也能出标题**（服务端不校验）")
+    s.add_argument("-t", "--title-type", dest="title_type", type=int, default=1,
+                   help="1 按话题方向（默认） / 2 换旧标题 / 3 按内容")
+    s.add_argument("--old-title", dest="old_title", default=None,
+                   help="旧标题，-t 2 用")
+    s.add_argument("--text", default=None, help="-t 3 的正文，直接给字符串")
+    s.add_argument("--path", default=None, help="-t 3 的正文文件路径")
+    s.add_argument("--type", default="T", choices=["H1", "H2", "T"],
+                   help="TxtStruct 的 type，默认 T（正文）")
+    s.set_defaults(func=cmd_article_title)
+
+    s = asub.add_parser("outline",
+                        help="按正文生成大纲（`lm/generate/outline`，**普通 JSON**）")
+    s.add_argument("article_id", metavar="articleId")
+    s.add_argument("--path", default=None, help="正文文件路径")
+    s.add_argument("--text", default=None, help="正文，直接给字符串")
+    s.set_defaults(func=cmd_article_outline)
+
+    s = asub.add_parser("continue", help="续写（`lm/content/continueWrite`，**SSE 流式**）")
+    s.add_argument("article_id", metavar="articleId")
+    s.add_argument("--start", default=None, help="前文")
+    s.add_argument("--end", default=None, help="后文")
+    s.add_argument("--start-path", dest="start_path", default=None)
+    s.add_argument("--end-path", dest="end_path", default=None)
+    s.add_argument("--prompt", default=None, help="customPrompt")
+    s.add_argument("--raw", action="store_true", help="边收边打（看流式效果）")
+    s.add_argument("--json", action="store_true", help="连增量数组一起打出来")
+    _add_wait(s, 120, help="整条流的上限（秒）")
+    s.set_defaults(func=cmd_article_continue)
+
+    s = asub.add_parser("common-continue",
+                        help="通用续写（`lm/content/commonContinueWrite`，SSE）。"
+                             "**不依赖文章**")
+    s.add_argument("--before", default=None, help="光标前的文本")
+    s.add_argument("--after", default=None, help="光标后的文本")
+    s.add_argument("--subtype", type=int, default=15000,
+                   help="前端用的取值，默认 15000（实测能出文本）")
+    _add_wait(s, 120, help="整条流的上限（秒）")
+    s.set_defaults(func=cmd_article_common_continue)
+
+    s = asub.add_parser("rewrite", help="改写（`lm/rewrite/content`，**SSE 流式**）")
+    s.add_argument("article_id", metavar="articleId")
+    s.add_argument("--content", default=None, help="要改写的那一段")
+    s.add_argument("--path", default=None, help="那段内容的文件路径")
+    s.add_argument("--full", default=None,
+                   help="fullContent；**不给会报 code=100**，默认用 --content 顶上")
+    s.add_argument("--method", type=int, default=1,
+                   help="rewriteMethodId，默认 1（实测 1/2 都能出文本）")
+    s.add_argument("--subtype", type=int, default=15000)
+    s.add_argument("--type", type=int, default=1)
+    s.add_argument("--prompt", default=None, help="customPrompt")
+    _add_wait(s, 120, help="整条流的上限（秒）")
+    s.set_defaults(func=cmd_article_rewrite)
+
+    # ---- image —— AI 绘画（op10）----
+    #
+    # `style` / `size` 的**合法取值必须现取**（`img/getImgReferenceList`），
+    # 不能照文档抄：文档给的那六个风格在白名单里，但提交它们会被平台静默
+    # 改写成别的模型然后失败/挂住。所以这里的 `--style` 不做 argparse choices
+    # （白名单是运行期才知道的），而是由 ImageGenAPI 在**发请求前**挡——
+    # 这条链路**失败也建记录**，所以本地校验是必需项不是优化项。
+    ip = sub.add_parser("image", aliases=["img"], help="AI 绘画（op10）")
+    isub = ip.add_subparsers(dest="subcmd", required=True)
+
+    s = isub.add_parser("styles", help="风格白名单 + 每个风格的尺寸表（实时接口）")
+    s.add_argument("--refresh", action="store_true",
+                   help="绕过进程内缓存重新取（白名单本身很少变）")
+    s.set_defaults(func=cmd_image_styles)
+
+    s = isub.add_parser("sizes", help="某个风格的合法尺寸。**尺寸跟着风格走**")
+    s.add_argument("style", help="风格值，从 `image styles` 拿")
+    s.set_defaults(func=cmd_image_sizes)
+
+    def _add_image_args(p, wait_default=None):
+        p.add_argument("prompt", help="正向提示词")
+        p.add_argument("--style", default=KNOWN_GOOD_STYLE,
+                       help="风格，默认 %s（丹青模型，实测能出图）。"
+                            "**别的值先看 `image styles`**，白名单外的会被本地拒绝"
+                            % KNOWN_GOOD_STYLE)
+        p.add_argument("--size", default="正方形",
+                       help="尺寸，默认 正方形。**必须在该风格的尺寸表里**，"
+                            "且硬必填（缺了平台报 code=100）")
+        p.add_argument("--reverse-prompt", dest="reverse_prompt", default=None,
+                       help="负向提示词。可传、会被记录，**不影响成败**")
+        p.add_argument("--img-number", dest="img_number", type=int, default=None,
+                       help="出图张数。同上，实测 2 确实回两张，但不影响成败")
+        p.add_argument("--interval", type=int, default=3, help="轮询间隔（秒）")
+        if wait_default is not None:
+            _add_wait(p, wait_default,
+                      help="轮询上限（秒）。到点未完成则退出码 3，不是错误")
+
+    s = isub.add_parser("draw", help="提交 + 等出图，一次拿到图片地址")
+    _add_image_args(s, 180)
+    s.add_argument("--json", action="store_true")
+    s.set_defaults(func=cmd_image_draw)
+
+    s = isub.add_parser("submit", help="只提交，秒级返回 taskId")
+    _add_image_args(s)
+    s.set_defaults(func=cmd_image_submit)
+
+    s = isub.add_parser("poll", help="短轮询出图结果")
+    s.add_argument("task_id", metavar="taskId")
+    s.add_argument("--interval", type=int, default=3, help="轮询间隔（秒）")
+    _add_wait(s, 60)
+    s.add_argument("--json", action="store_true")
+    s.set_defaults(func=cmd_image_poll)
+
+    s = isub.add_parser("get", help="只查一次，不轮询")
+    s.add_argument("task_id", metavar="taskId")
+    s.add_argument("--json", action="store_true")
+    s.set_defaults(func=cmd_image_get)
+
+    s = isub.add_parser("records", help="绘画记录（type=1 是生图历史）")
+    s.add_argument("--type", type=int, default=1,
+                   help="1 AI 绘画生图历史（默认） / 2 图片编辑历史图库 / "
+                        "3 图片编辑历史记录")
+    s.add_argument("--page", type=int, default=1,
+                   help="页码。**pageNum/pageSize 是必填的**（只发 type 报 code=100）")
+    s.add_argument("--size", type=int, default=20)
+    s.set_defaults(func=cmd_image_records)
+
+    s = isub.add_parser("delete",
+                        help="删绘画记录（**收 img 表的 id，不是 taskId**）。"
+                             "不带 --yes 只列不删")
+    s.add_argument("img_ids", nargs="*", metavar="id")
+    s.add_argument("--failed", action="store_true",
+                   help="不点名，改为列出所有 taskStatus=4 的垃圾记录")
+    s.add_argument("--scan", type=int, default=50,
+                   help="配 --failed 用，扫前 N 条记录，默认 50")
+    s.add_argument("--yes", action="store_true", help="确认删除")
+    s.set_defaults(func=cmd_image_delete)
 
     # ---- speech ----
     sp = sub.add_parser("speech", help="语音合成（文字转音频）")

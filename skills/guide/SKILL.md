@@ -103,7 +103,7 @@ printf '%s' '<用户给的 JWT>' | bash "$S/scripts/run.sh" set-token --stdin
 
 ## 第 3 步：路由到应用 skill
 
-已跑通、可直接用的六个：
+已跑通、可直接用的九个：
 
 | 用户想做什么 | 唤起哪个 skill |
 | --- | --- |
@@ -113,6 +113,9 @@ printf '%s' '<用户给的 JWT>' | bash "$S/scripts/run.sh" set-token --stdin
 | 给一段**朗读音频**打分、要发音反馈 | `unipus-aigc:oral-review` |
 | 就自己的文档提问（RAG）、要带出处的答案 | `unipus-aigc:kb-qa` |
 | 把一段文字念成音频（TTS / 朗读 / 配音 / 听力音频） | `unipus-aigc:speech` |
+| **根据阅读材料出题**（单选/多选/判断/问答，可采纳） | `unipus-aigc:question-gen` |
+| **画一张图**（AI 绘画 / 文生图 / 给文章配图） | `unipus-aigc:image-gen` |
+| **写文章**（起标题 / 列大纲 / 续写 / 改写） | `unipus-aigc:text-gen` |
 
 > **别把 `translate` 和 `trans-review` 搞混**：前者**产出译文**，后者**只给译文打分**。
 > 用户说"帮我改改这段译文"走 `translate`；说"这段翻得怎么样"走 `trans-review`。

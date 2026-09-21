@@ -11,6 +11,9 @@
 * **RAG v2（会话式、分块级溯源）** —— :class:`~unipus_aigc.rag_v2.RagV2API`
 * **语音合成** —— :class:`~unipus_aigc.speech.SpeechAPI`
 * **同步 operation（11/13/14/15/17）** —— :class:`~unipus_aigc.sync_ops.SyncAPI`
+* **出题（阅读材料 → 出题 → 采纳）** —— :class:`~unipus_aigc.question_gen.QuestionGenAPI`
+* **图像生成（AI 绘画 / 文生图）** —— :class:`~unipus_aigc.image_gen.ImageGenAPI`
+* **文章写作 / 文本生成** —— :class:`~unipus_aigc.article.ArticleAPI`
 
 快速上手::
 
@@ -36,7 +39,12 @@ from .constants import (Level, Operation, RecordType, SubType, TaskStatus,
                         norm_lang, norm_lang_short)
 from .errors import AigcError, MissingTokenError, StillRunning, TaskFailed, TaskTimeout
 from .kb_qa import KnowledgeBaseAPI
+from .article import (SUB_TYPES, TITLE_TYPES, TXT_TYPE, ArticleAPI, outline_markdown,
+                      txt_struct)
+from .image_gen import IMAGE_TYPES, KNOWN_GOOD_STYLE, ImageGenAPI, ImgStyle, images_of
 from .oral_review import OralReviewAPI
+from .question_gen import (EDUCATION, PLOY_CODES, RM_SUBTYPE, QuestionGenAPI,
+                           questions_of)
 from .rag_v2 import (APPROVE_NO, APPROVE_YES, DOC_STATUS, KB_SOURCES,
                      TERMINAL_DOC_STATUS, RagSession, RagV2API, doc_type_of)
 from .review import ReviewAPI
@@ -59,6 +67,22 @@ __all__ = [
     "RagSession",
     "SpeechAPI",
     "SyncAPI",
+    "QuestionGenAPI",
+    "questions_of",
+    "PLOY_CODES",
+    "RM_SUBTYPE",
+    "EDUCATION",
+    "ImageGenAPI",
+    "ImgStyle",
+    "images_of",
+    "IMAGE_TYPES",
+    "KNOWN_GOOD_STYLE",
+    "ArticleAPI",
+    "txt_struct",
+    "outline_markdown",
+    "TITLE_TYPES",
+    "TXT_TYPE",
+    "SUB_TYPES",
     "doc_type_of",
     "KB_SOURCES",
     "DOC_STATUS",
