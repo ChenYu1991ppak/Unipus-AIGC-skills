@@ -15,6 +15,7 @@ import json
 import time
 
 from .constants import Level, Operation, SubType
+from .errors import StillRunning, TaskTimeout
 
 
 class ReviewAPI:
@@ -24,6 +25,41 @@ class ReviewAPI:
     # ------------------------------------------------------------------
     # 入口
     # ------------------------------------------------------------------
+    def submit_essay(self, content, topic="", level=Level.COLLEGE, title=None):
+        """**只提交，不等结果**：``wm/create`` + ``task/submit``，秒级返回。
+
+        :return: ``{"wmId": ..., "taskId": ...}``
+
+        拿到 ``taskId`` 后用 :meth:`poll` 查结果。**不要用 ``wmId`` 去
+        ``wm/detail`` 取评阅结果**——那个接口的 ``evaluation`` 字段永远是
+        ``null``，轮询几十次也不会填充。
+        """
+        title = title or topic or f"作文评阅-{time.strftime('%Y%m%d-%H%M%S')}"
+        topic = topic or title
+
+        rec = self._c.get_value("wm/create", {
+            "title": title,
+            "type": "1",
+            "subType": SubType.CompositionReview,
+            "topic": topic,
+            "content": content,
+            "level": int(level),
+        })
+        wm_id = (rec or {}).get("wmId")
+        if not wm_id:
+            raise ValueError(f"wm/create 未返回 wmId: {rec}")
+
+        task_id = self._c.submit_task(Operation.CompositionReview, {
+            "topic": topic,
+            "content": content,
+            "level": int(level),
+            "wmId": wm_id,
+            "subType": SubType.CompositionReview,
+            "evaluationName": title,
+            "fileUrl": "",
+        })
+        return {"wmId": wm_id, "taskId": task_id, "title": title, "topic": topic}
+
     def essay(self, content, topic="", level=Level.COLLEGE, title=None,
               *, poll_interval=4, timeout=300):
         """评阅一篇作文，返回结构化的评阅结果。
@@ -50,33 +86,37 @@ class ReviewAPI:
               ]
             }
         """
-        title = title or topic or f"作文评阅-{time.strftime('%Y%m%d-%H%M%S')}"
-        topic = topic or title
-
-        rec = self._c.get_value("wm/create", {
-            "title": title,
-            "type": "1",
-            "subType": SubType.CompositionReview,
-            "topic": topic,
-            "content": content,
-            "level": int(level),
-        })
-        wm_id = (rec or {}).get("wmId")
-        if not wm_id:
-            raise ValueError(f"wm/create 未返回 wmId: {rec}")
-
-        task_id = self._c.submit_task(Operation.CompositionReview, {
-            "topic": topic,
-            "content": content,
-            "level": int(level),
-            "wmId": wm_id,
-            "subType": SubType.CompositionReview,
-            "evaluationName": title,
-            "fileUrl": "",
-        })
-        result = self._c.wait_task(task_id, interval=poll_interval, timeout=timeout)
+        sub = self.submit_essay(content, topic=topic, level=level, title=title)
+        result = self._c.wait_task(sub["taskId"], interval=poll_interval,
+                                   timeout=timeout)
         if isinstance(result, dict):
-            result.setdefault("wmId", wm_id)
+            result.setdefault("wmId", sub["wmId"])
+            result.setdefault("taskId", sub["taskId"])
+        return result
+
+    def poll(self, task_id, *, interval=4, timeout=60):
+        """**短轮询**评阅结果；没出结果就抛 :class:`StillRunning`。
+
+        :param task_id: :meth:`submit_essay` 返回的 ``taskId``（不是 wmId）
+        :raises StillRunning: 到时仍未出结果，稍后用同一个 taskId 再来一次
+        """
+        try:
+            result = self._c.wait_task(task_id, interval=interval, timeout=timeout)
+        except TaskTimeout as e:
+            raise StillRunning(
+                f"评阅任务 {task_id} 仍在处理中，{timeout}s 内未出结果。"
+                f"稍后用同一个 taskId 再 poll 一次。",
+                path="task/queryTask", payload=e.payload,
+            ) from e
+        if isinstance(result, dict):
+            result.setdefault("taskId", task_id)
+        return result
+
+    def get(self, task_id):
+        """**只查一次**，不轮询。未完成返回 ``None``。"""
+        raw = self._c.query_task(task_id)
+        result = self._c.parse_task_result(raw)
+        if isinstance(result, dict):
             result.setdefault("taskId", task_id)
         return result
 

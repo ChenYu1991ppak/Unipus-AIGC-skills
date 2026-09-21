@@ -23,7 +23,7 @@ import os
 import time
 
 from .constants import Operation
-from .errors import TaskTimeout
+from .errors import StillRunning, TaskTimeout
 
 # 文档解析完成的状态值
 READY = "green"
@@ -84,6 +84,11 @@ class KnowledgeBaseAPI:
 
     def upload_document_by_url(self, kb_id, url, doc_name, *, wait=True,
                                poll_interval=5, timeout=300):
+        """把已上传到七牛的文档挂进知识库。
+
+        ``wait=False`` 时**只提交不等解析**，返回一个占位 dict（含 ``docName``），
+        之后用 :meth:`poll_document` 查解析状态。这是长任务的正确入口。
+        """
         self._c.get_value("rag/kbp/project/docUpload", {
             "kbId": kb_id,
             "docName": doc_name,
@@ -91,7 +96,8 @@ class KnowledgeBaseAPI:
             "type": "document",
         })
         if not wait:
-            return None
+            return {"kbId": kb_id, "docName": doc_name, "url": url,
+                    "status": "pending"}
         return self.wait_document(kb_id, doc_name, poll_interval=poll_interval,
                                   timeout=timeout)
 
@@ -105,6 +111,8 @@ class KnowledgeBaseAPI:
         判定条件是 ``status == "green"`` **且** ``chunkSize > 0``。
         刚上传时 ``ready`` 字段就已经是 "green" 而 ``status`` 还是 "gray"、
         ``chunkSize`` 是 -1，此时提问会拿到空答案——不要只看 ``ready``。
+
+        :raises StillRunning: 到时仍未解析完成（稍后用同一参数再来一次）
         """
         deadline = time.time() + timeout
         last = None
@@ -117,8 +125,15 @@ class KnowledgeBaseAPI:
             if last and last.get("status") == READY and (last.get("chunkSize") or 0) > 0:
                 return last
             time.sleep(poll_interval)
-        raise TaskTimeout(f"文档 {doc_name} 在 {timeout}s 内未解析完成",
-                          path="rag/kbp/project/docList", payload=last)
+        raise StillRunning(
+            f"文档 {doc_name or '(最新一篇)'} 在 {timeout}s 内未解析完成，"
+            f"稍后用同一个 kbId 再查一次。",
+            path="rag/kbp/project/docList", payload=last)
+
+    def poll_document(self, kb_id, doc_name=None, *, poll_interval=5, timeout=60):
+        """**短轮询**文档解析状态。语义同 :meth:`wait_document`，默认只等 60s。"""
+        return self.wait_document(kb_id, doc_name, poll_interval=poll_interval,
+                                 timeout=timeout)
 
     def delete_document(self, kb_id, file_id):
         """删文档。参数名是 ``kbId`` + ``fileId``（docList 里返回的 ``docId``）。"""
@@ -128,18 +143,55 @@ class KnowledgeBaseAPI:
     # ------------------------------------------------------------------
     # 问答
     # ------------------------------------------------------------------
+    def submit_question(self, kb_id, question):
+        """**只提交，不等结果**：``task/submit``(operation 102)，秒级返回 taskId。
+
+        提问前务必确认文档已解析完成（``status == "green"`` 且 ``chunkSize > 0``）：
+        没解析完时接口**返回 200 但答案是空字符串**，不报错，最容易误判。
+
+        .. warning::
+           这里必须用 ``Operation.KBQA``（**102**，前端逆向值）。
+           文档枚举表里那个 `知识库问答-新 = 16` 是另一条通道，入参是
+           ``qaListId``/``qaId`` 而**不收 kbId**，实测只会回一段固定罐头拒答
+           （"抱歉，我无法回答该问题。"）外加一篇与本库无关的 docSource。
+           2026-09 对照实验：同一 kbId 下 102 命中、16 拒答，两个 source
+           （2 / 1715）都一样。改成 16 就是一个静悄悄的错答案。
+        """
+        return self._c.submit_task(Operation.KBQA, {
+            "question": question,
+            "kbId": kb_id,
+            "source": SOURCE_WEB,
+        })
+
     def ask(self, kb_id, question, *, poll_interval=3, timeout=180):
         """对知识库提一个问题，返回结果 dict。
 
         结果里通常有 ``answer``（带 ``[1]`` 这样的引用角标）和溯源信息
         （``sourceUrl`` / ``sourceName`` 等）。
         """
-        task_id = self._c.submit_task(Operation.KBQA, {
-            "question": question,
-            "kbId": kb_id,
-            "source": SOURCE_WEB,
-        })
+        task_id = self.submit_question(kb_id, question)
         result = self._c.wait_task(task_id, interval=poll_interval, timeout=timeout)
+        if isinstance(result, dict):
+            result.setdefault("taskId", task_id)
+        return result
+
+    def poll(self, task_id, *, interval=3, timeout=60):
+        """**短轮询**问答结果；没出结果就抛 :class:`StillRunning`。"""
+        try:
+            result = self._c.wait_task(task_id, interval=interval, timeout=timeout)
+        except TaskTimeout as e:
+            raise StillRunning(
+                f"问答任务 {task_id} 仍在处理中：{e}。"
+                f"稍后用同一个 taskId 再 poll 一次。",
+                path="task/queryTask", payload=e.payload,
+            ) from e
+        if isinstance(result, dict):
+            result.setdefault("taskId", task_id)
+        return result
+
+    def get(self, task_id):
+        """**只查一次**，不轮询。未完成返回 ``None``。"""
+        result = self._c.parse_task_result(self._c.query_task(task_id))
         if isinstance(result, dict):
             result.setdefault("taskId", task_id)
         return result
