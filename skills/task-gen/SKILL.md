@@ -1,41 +1,42 @@
 ---
 name: task-gen
 description: >-
-  Create teaching tasks as a task list for the Unipus AIGC platform — 英语朗读
-  评测 / 英语写作 / 阅读理解练习 / 翻译练习 / 看图作文 / 听力练习 each written
-  like a real classroom task, with the materials it needs (示范音频、阅读材料、
-  插图) noted as their own steps to be produced by other apps. A task list covers
-  many applications and can be handed to guide for execution. Use when the user
-  asks for 生成任务 / 造任务 / 任务清单 / 出一批练习 / 出一套题 / 组卷 /
-  教学任务 / 布置作业 / 阅读练习 / 写作练习 / 翻译练习 / 朗读任务 /
-  听力练习 / exercise / task list. 生成教学任务清单：默认不调用平台。
+  Create teaching tasks for the Unipus AIGC platform as a task list — 英语朗读
+  评测 / 英语写作 / 阅读理解练习 / 翻译练习 / 看图作文 / 听力练习. **The tasks
+  themselves are written by the model**, not generated from a bank: each one is a
+  real classroom exercise with its own passage, essay prompt or listening script,
+  and each records which application executes it and where its materials come
+  from. A task list covers many applications and can be handed to guide for
+  execution. Use when the user asks for 生成任务 / 造任务 / 任务清单 / 出一批练习 /
+  出一套题 / 组卷 / 教学任务 / 布置作业 / 阅读练习 / 写作练习 / 翻译练习 /
+  朗读任务 / 听力练习 / exercise / task list. 生成教学任务清单：默认不调用平台。
 ---
 
 # Unipus AIGC · 任务生成
 
-**产出是一份任务清单**——每条任务都像真实课堂里的一次作业或练习，写清楚：
+**产出是一份任务清单**——每条任务都像真实课堂里的一次作业或练习。
 
-- **交给哪个应用**去执行（朗读评测 → `oral-review`，作文评阅 → `review`……）
-- **素材从哪来**（示范音频交给 `speech` 合成，阅读材料交给 `text-gen` 起草，
-  作文正文由学生自己写）
-- **期望产出什么**（分数、纠错、题目……）
-
-除了清单本身，**本 skill 不调用任何平台接口**——任务交给 `guide` 去执行。
+> ⭐ **任务是现写的。** 没有素材库、没有模板——你（模型）按题型的要求**自己
+> 写内容**：一篇短文、一道作文题、一段听力脚本。程序只负责收下、校验、
+> 交给 `guide`。
+>
+> **任务名要像真题**（"英语朗读评测：A Letter to My Teacher"、
+> "看图作文：清晨的图书馆"），**不能是"XXX 测试"**。
 
 ## 先问清楚两件事
 
-1. **要哪些题型**。现有六种（`tasks list` 可以看）：
+1. **要哪些题型**。现有六种（`tasks types` 可以看）：
 
-   | 题型 | 交给 | 素材由谁产出 |
+   | 题型 | 执行交给 | 素材由谁产出 |
    | --- | --- | --- |
-   | 英语朗读评测 | `oral-review` | 示范音频 ← `speech` |
-   | 英语写作 | `review` | （题面在任务里） |
-   | 阅读理解练习 | `question-gen` | 阅读材料 ← `text-gen` |
-   | 翻译练习 | `trans-review` | （原文在任务里） |
-   | 看图作文 | `review` | 插图 ← `image-gen` |
-   | 听力练习 | `question-gen` | 脚本 ← `text-gen`，音频 ← `speech` |
+   | `oral-drill` 朗读评测 | `oral-review` | 示范音频 ← `speech` |
+   | `essay-writing` 写作 | `review` | （题面写在任务里） |
+   | `reading-comprehension` 阅读理解 | `question-gen` | 阅读材料 ← 你写，或 `text-gen` 起草 |
+   | `translation-drill` 翻译 | `trans-review` | （原文写在任务里） |
+   | `picture-writing` 看图作文 | `review` | 插图 ← `image-gen` |
+   | `listening-comprehension` 听力 | `question-gen` | 脚本 ← 你写；音频 ← `speech` |
 
-2. **每种要几条**（`--count` 是**每种题型**各几条）。
+2. **要几条、什么学段**。
 
 ## 命令入口
 
@@ -47,111 +48,128 @@ bash "$S/scripts/run.sh" tasks <子命令> [参数...]
 ```
 
 退出码：`0` 成功 / `1` 真失败 / `2` 用法错（**一个请求都没发**）/ `3` 仍在处理中。
-stderr 上的 `NotOpenSSLWarning` 是环境噪声。
 
-## 出题（不碰平台）
+## 出题：四步
+
+### ① 看题型要求
 
 ```bash
-bash "$S/scripts/run.sh" tasks list                        # 六种题型
-bash "$S/scripts/run.sh" tasks gen --count 4 --seed 42      # 每种 4 条 = 24 条
-bash "$S/scripts/run.sh" tasks gen --task oral-drill,essay-writing --count 6
+bash "$S/scripts/run.sh" tasks types              # 六种题型一览
+bash "$S/scripts/run.sh" tasks show oral-drill     # 一种题型的详细要求
 ```
 
-落在 `~/.cache/unipus-aigc/tasks/<任务集>/`：
+`tasks show <题型>` 会告诉你：**题干怎么写、素材从哪来、执行命令长什么样、
+有哪些坑必须如实写进 `notes`**。**写之前先看这个**——它替你省掉一次试错。
 
+### ② 建一个任务集
+
+```bash
+bash "$S/scripts/run.sh" tasks new --title "高二英语·九月练习"
 ```
-清单.md                    一眼看完的目录（按场景分组）
-manifest.json              机器可读的清单
-tasks/03-reading-comprehension.md    每条任务一张卡（含交接语）
-tasks/03-reading-comprehension.json
-materials/                 素材取件目录（空目录，等 guide 往里放东西）
+
+回一个任务集 id（形如 `20260922-154727`）。
+
+### ③ 把写好的任务交进去
+
+**推荐走 `--stdin`**（省得写临时文件）：
+
+```bash
+bash "$S/scripts/run.sh" tasks add --stdin <<'JSON'
+{
+  "taskKey": "oral-drill",
+  "title": "英语朗读评测：A Letter to My Teacher",
+  "application": "oral-review",
+  "scenario": "口语练习",
+  "level": 1,
+  "goal": "学生朗读一封感谢信，录音提交，得到总分和逐词发音反馈",
+  "audience": "高二英语课堂，一人一段，约 1 分钟",
+  "tags": ["口语", "朗读", "书信"],
+  "brief": "朗读下面这封信，录音后提交。\n\nDear Miss Chen, thank you for helping me with my English last term. …",
+  "materials": [
+    {"label": "朗读示范音频", "who": "平台（TTS 合成）", "app": "speech",
+     "purpose": "给学生一段标准范读",
+     "shell": "speech say \"Dear Miss Chen, …\" --speaker us_annie --language 2 --speed 1.0 --out materials/01-demo.mp3",
+     "saves_as": "materials/01-demo.mp3",
+     "handoff": "把这段文字念成音频，美式发音，原速"},
+    {"label": "学生朗读录音", "who": "学生", "app": "student",
+     "saves_as": "materials/01-recording.mp3"}
+  ],
+  "steps": [
+    {"n": 1, "label": "口语评阅", "application": "oral-review", "command": "oral review",
+     "purpose": "给这段朗读打分并给出发音反馈",
+     "shell": "oral review materials/01-recording.mp3 \\\n    --content \"Dear Miss Chen, …\" --ques-type 1",
+     "outcome": "百分制总分 + 逐词发音建议",
+     "handoff": "评阅这段朗读录音，朗读原文是那封感谢信"}
+  ],
+  "notes": ["示范音频是标准发音，评阅分数基本都偏高——这条任务的价值在给学生一段范读。"]
+}
+JSON
 ```
 
-常用参数：
+一次好几条就用 `--dir`：把几个 `.json` 放一个目录，
+`tasks add --dir ./written/`。**整批先全验一遍再一起写**——一条坏的不会让
+半批脏数据落盘，报错会指名道姓是哪个文件。
 
-| 参数 | 说明 |
+### ④ 验一遍、交给 guide
+
+```bash
+bash "$S/scripts/run.sh" tasks check                 # 全验（推荐每次写完都跑）
+bash "$S/scripts/run.sh" tasks handoff 01            # 打「交给 guide 的话」
+bash "$S/scripts/run.sh" tasks catalog --write       # 生成 清单.md
+```
+
+`check` 会验：结构齐不齐、应用名认不认识、**shell 能不能解析**、
+**引用的 `materials/xx` 前面有没有产出过**、同一套里标题有没有撞、
+TTS 音色在不在已实测的名单里。
+
+## 任务的 JSON 形状
+
+| 字段 | 说明 |
 | --- | --- |
-| `--task <名\|all>` | 题型，逗号分隔，默认 `all` |
-| `--count N` | **每种题型**各 N 条 |
-| `--seed N` | 给了就完全可复现（同 seed 两次跑，清单逐字节相同） |
-| `--speaker <音色>` | 把所有 TTS 素材的音色统一成它（默认随机 `en_luka` / `us_annie`） |
-| `--out <目录>` | 换落盘根目录 |
+| `taskNo` | 编号，两位。**不给会自动分配** |
+| `title` | **像真题一样的标题**，别叫"XXX 测试" |
+| `application` | 执行交给哪个应用（见题型的「执行交给」） |
+| `brief` | **学生看到的那段话**，含题面全文 |
+| `materials[]` | 素材：`label` / `who`（谁来做）/ `app` / `shell` / `saves_as` / `handoff` |
+| `steps[]` | 执行：`label` / `application` / `command` / `shell` / `outcome` / `handoff` |
+| `notes[]` | 这条任务必须让人知道的（平台限制、诚实说明） |
 
-其它：
+两条硬要求：
 
-```bash
-bash "$S/scripts/run.sh" tasks sets               # 已有的任务集
-bash "$S/scripts/run.sh" tasks show 05            # 看第 5 条（编号或标题片段）
-bash "$S/scripts/run.sh" tasks handoff 05         # 只打「交给 guide 的话」
-bash "$S/scripts/run.sh" tasks check              # 本地校验（占位符、应用名、路径）
-bash "$S/scripts/run.sh" tasks set-speaker us_annie            # 整批换音色（默认最新那套）
-```
+- **素材交给平台产出的，必须写 `saves_as`** —— 执行那一步要知道文件在哪。
+- **`shell` 要写出来**，不能只说"用 speech"：`check` 会拿去 `shlex` 解析，
+  引号配平、引用的文件存在，都在这一关拦。
 
-`--count` 超过素材数会**直接报错**（退出码 2），不会悄悄给你一批重复的。
+`materials` 里 `app` 是 `student` / `teacher` 的表示人工准备，不用写 `shell`。
 
-## 清单里的每条任务长这样
-
-```
-# 任务 03　英语朗读评测：A Quiet Morning
-交给哪个应用：oral-review　　场景：口语练习　　学段：高中
-
-## 题目
-朗读下面这篇短文，录音后提交。系统会给出总分和逐词发音建议。
-短文：The library opens at eight in the morning. …
-
-## 素材准备
-1. 朗读示范音频   平台（TTS 合成） → materials/03-demo.mp3
-2. 学生朗读录音   学生           → materials/03-recording.mp3
-
-## 交给 guide 执行
-口语评阅 → oral-review
-  评阅这段朗读录音，朗读原文是「The library opens …」
-```
-
-**「交接语」是给 `guide` 看的**——照着念或直接粘过去，`guide` 会路由到对应应用。
-
-## 怎么把任务交出去
+## 把任务交出去
 
 ```bash
-bash "$S/scripts/run.sh" tasks handoff 03
+bash "$S/scripts/run.sh" tasks handoff 01
 ```
 
-把这些话交给 `/unipus-aigc:guide`（或者直接调用对应的应用 skill）。**素材那几步
-也一样**——比如"把这段文字念成音频"就是交给 `speech`。
+把这些话交给 `/unipus-aigc:guide`（或直接调用对应应用 skill）。**素材那几步
+也一样**——"把这段文字念成音频"就是交给 `speech`。
 
 > **本 skill 只出清单，不执行。** 不要在这里替用户跑任务、也不要自己去调
 > `speech` / `review` 那些接口——那是 `guide` 和各应用 skill 的职责。
-> 本 skill 唯一会碰平台的命令是 `tasks set-speaker --check`（现问音色白名单）。
+> **整个 `tasks` 域不构造 client**，一条平台请求都不发。
 
 ## 凭证（token）
 
-**默认什么都不用配。** `tasks list` / `gen` / `sets` / `show` / `handoff` /
-`check` / `set-speaker` 全都**一个平台请求都不发**（也不构造 client），
-没配过凭证照样能出题。
+**什么都不用配。** `tasks` 的所有子命令都**不发平台请求**，没配过凭证照样能用。
 
-只有 `tasks set-speaker --check` 会调平台。那时才需要看凭证：
-
-```bash
-bash "$S/scripts/run.sh" token        # 退出码 0 = 可用；1 = 过期或没配
-```
-
-按结果分两种，**两种都是把用户送去 `/unipus-aigc:guide`**：
-
-| `token` 的结果 | 怎么做 |
-| --- | --- |
-| 退出码 `1` + `未找到 JWT` / 从没配过 | 用户**没有**账号密码 → 让他运行 `/unipus-aigc:guide`，那里会问他要账号密码 |
-| 退出码 `1` + `EXPIRED`，但配过账号密码 | 自动续期没成功 → 也让他走 `/unipus-aigc:guide` 重新给一次 |
-
-> **本 skill 不管登录。** 不要在这里向用户索要账号密码，
-> 也不要引导他手动粘 JWT——那是 `/unipus-aigc:guide` 的职责。
+> **本 skill 不管登录。** 不要在这里向用户索要账号密码，也不要引导他手动粘
+> JWT——那是 `/unipus-aigc:guide` 的职责。只有当用户想在**别的 skill** 里跑
+> 任务、而那边报凭证错时，才让他走 `/unipus-aigc:guide`。
 
 ## 三条必须对用户说清楚的（都是平台属性，不是缺陷）
 
 1. **朗读评测的分数天然偏高。** 示范音频是 TTS 合成的**标准发音**，
    拿它去评阅实测 95–98。这条任务的价值在「给学生一段范读」和
-   「看反馈里该怎么读」，**不在测出学生多差**。
+   「看反馈里该怎么读」，**不在测出学生多差**。写 `notes` 时要如实说。
 2. **阅读/听力练习的「答题」没有平台接口。** 文档里的 `ques/ans` 实测 404，
-   所以学生作答只能人工收，平台不判分。
+   学生作答只能人工收，平台不判分。
 3. **阅读材料建了就删不掉。** 平台没有 `rm/delete`。所以出题那类任务适合
    按学期规划好条数再跑，别随手试。
 
@@ -168,5 +186,5 @@ bash "$S/scripts/run.sh" token        # 退出码 0 = 可用；1 = 过期或没�
 
 ## 更深的材料
 
-题型定义、素材从哪来、每条注意事项的依据，都在 plugin 仓库的
+题型要求、素材从哪来、每条注意事项的依据，都在 plugin 仓库的
 `docs/call-chains.md`（§12 是任务生成）。

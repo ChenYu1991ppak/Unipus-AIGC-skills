@@ -13,10 +13,10 @@
 * **同步 operation（11/13/14/15/17）** —— :class:`~unipus_aigc.sync_ops.SyncAPI`
 * **出题（阅读材料 → 出题 → 采纳）** —— :class:`~unipus_aigc.question_gen.QuestionGenAPI`
 * **图像生成（AI 绘画 / 文生图）** —— :class:`~unipus_aigc.image_gen.ImageGenAPI`
-* **任务生成** —— :mod:`unipus_aigc.exercise`（产出**任务清单**：
-  每条任务写明交给哪个应用、素材从哪来、期望产出什么）。
-  **这一层不新增平台调用**，`gen` 只出任务清单、**一条请求都不发**；
-  任务本身由 `guide` 路由到对应应用去执行。
+* **任务生成** —— :mod:`unipus_aigc.exercise`。**任务由 agent 现写**，
+  这个模块只负责查（`TASK_TYPES` / :func:`type_doc`）、收
+  （:func:`add_task`）、验（:func:`check_task`）、交给 ``guide``
+  （:func:`handoff_lines`）。**一条网络请求都不发。**
 
 快速上手::
 
@@ -41,8 +41,9 @@ from .client import SyncOutcome, UnipusAIGC
 from .constants import (Level, Operation, RecordType, SubType, TaskStatus,
                         norm_lang, norm_lang_short)
 from .errors import AigcError, MissingTokenError, StillRunning, TaskFailed, TaskTimeout
-from .exercise import (ALL_TASKS, BANKS, TASKS, gen_batch, load_set,
-                       set_tasks, sets, write_set)
+from .exercise import (ALL_TYPES, TASK_TYPES, add_task, catalog, check_task,
+                       find_task, handoff_lines, load_set, new_set, render_task,
+                       set_tasks, sets, type_doc)
 from .sso import SsoError, encrypt_sso, login, refresh, needs_refresh
 from .kb_qa import KnowledgeBaseAPI
 from .article import (SUB_TYPES, TITLE_TYPES, TXT_TYPE, ArticleAPI, outline_markdown,
@@ -95,14 +96,19 @@ __all__ = [
     "TERMINAL_DOC_STATUS",
     "APPROVE_YES",
     "APPROVE_NO",
-    "TASKS",
-    "ALL_TASKS",
-    "BANKS",
-    "gen_batch",
-    "write_set",
+    "TASK_TYPES",
+    "ALL_TYPES",
+    "new_set",
+    "add_task",
     "load_set",
     "set_tasks",
     "sets",
+    "find_task",
+    "check_task",
+    "handoff_lines",
+    "render_task",
+    "catalog",
+    "type_doc",
     "AigcError",
     "MissingTokenError",
     "SsoError",

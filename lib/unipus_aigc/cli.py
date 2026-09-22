@@ -1091,54 +1091,98 @@ def _trans_review_texts(args):
 # ----------------------------------------------------------------------
 # tasks —— 任务生成（**不调平台**）
 #
-# 产出的是**任务清单**：每条任务写明交给哪个应用、素材从哪来、期望产出什么。
-# 任务本身由 `guide` 路由到对应应用去执行——本域不构造 client，
-# 所以没配凭证也能出题。
+# ⚠️ **任务不是这个 CLI 生成的**——它是 agent 现写的。这一组只提供机器该做
+# 的事：查题型、收任务、验、交给 guide。
 #
-# ⚠️ `gen` / `list` / `show` **一个平台请求都不发**。唯一的例外是
-# `tasks set-speaker --check`，它要用 `speech speakers` 校验音色。
+# 所以"按模板批量出题"那种子命令**是有意没有的**：素材库拼出来的是同一道题
+# 的 N 个变体，而人要的是"像真实任务"的内容——那只能现写。
+#
+# 整个域**不构造 client**，一行网络请求都不发（没配凭证也能用）。
 # ----------------------------------------------------------------------
-def cmd_tasks_list(args):
+def cmd_tasks_types(args):
     """有哪些题型。**零平台调用。**"""
     from .exercise import tasks_table
 
     print(tasks_table())
-    _note("任务名前面的那串可以传给 `tasks gen --task`。")
+    _note("看某一种的详细说明（题干怎么写、素材从哪来、有哪些坑）：")
+    _note("  `tasks show <题型名>`")
     return EXIT_OK
 
 
-def cmd_tasks_gen(args):
-    """生成一套任务清单。**零平台调用。**"""
-    from .exercise import LocalCheckError, gen_batch, render_markdown, write_set
+def cmd_tasks_show(args):
+    """看一种题型的说明，或看一条已经写好的任务。**零平台调用。**"""
+    from .exercise import ALL_TYPES, find_task, render_task, type_doc
 
-    names = [n.strip() for n in str(args.task).split(",") if n.strip()]
-    try:
-        set_id, tasks, manifest = gen_batch(
-            "all" if names == ["all"] else names, args.count,
-            seed=args.seed, speaker=args.speaker)
-    except LocalCheckError as e:
-        _note(f"用错了（**没有写任何文件**）：{e}")
-        return 2
+    if args.target in ALL_TYPES and not args.set_id:
+        print(type_doc(args.target))
+        return EXIT_OK
 
-    dest = write_set(set_id, tasks, manifest, out=args.out)
+    set_id, path, task = find_task(args.target, args.set_id, out=args.out,
+                                   newest_only=args.target.isdigit())
     if args.json:
-        print(_dump(manifest))
+        print(_dump(task))
     else:
-        print(f"任务集 {set_id}　共 {len(tasks)} 条任务，"
-              f"覆盖 {len(manifest['applications'])} 个应用："
-              f"{'、'.join(manifest['applications'])}")
-        for task in tasks:
-            print(f"  {task['taskNo']}　{task['title']}　→ `{task['application']}`")
-        print(f"\n落盘：{dest}")
-        print(f"清单：{os.path.join(dest, '清单.md')}")
+        print(render_task(task, student=args.student))
+        _note(f"任务集：{set_id}　卡片：{path}")
+    return EXIT_OK
+
+
+def cmd_tasks_new(args):
+    """建一个空的任务集。**零平台调用。**"""
+    from .exercise import new_set, root_dir
+
+    set_id = new_set(args.title, out=args.out)
+    print(set_id)
+    _note(f"建好了：{os.path.join(root_dir(args.out), set_id)}")
     _note("")
-    _note("⚠️ **上面这些只是任务清单，一个平台请求都没发。**")
-    _note("看某一条：`tasks show <编号>`；把任务交给 guide：见任务卡最下面的「交接语」。")
-    if args.print:
-        print()
-        for task in tasks:
-            print(render_markdown(task))
-            print()
+    _note("下一步：把 agent 写好的任务加进去——")
+    _note("  `tasks add --stdin`（推荐，从管道喂）")
+    _note("  `tasks add --file a.json`")
+    _note("  `tasks add --dir ./written/`（一次好几条）")
+    return EXIT_OK
+
+
+def _read_task(args):
+    """从 --file / --stdin 读一条任务。两条路都过同样的校验。"""
+    from .exercise import LocalCheckError
+
+    if args.stdin:
+        raw, where = sys.stdin.read(), "<stdin>"
+    elif args.file:
+        with open(os.path.expanduser(args.file), encoding="utf-8") as fh:
+            raw = fh.read()
+        where = args.file
+    else:
+        raise LocalCheckError("要 `--stdin`（推荐）或 `--file <路径>`")
+    if not raw.strip():
+        raise LocalCheckError(f"{where} 是空的")
+    try:
+        return json.loads(raw)
+    except ValueError as e:
+        raise LocalCheckError(f"{where} 不是合法 JSON：{e}")
+
+
+def cmd_tasks_add(args):
+    """收下一条（或一批）**agent 写好的**任务。**零平台调用。**"""
+    from .exercise import LocalCheckError, add_dir, add_task
+
+    try:
+        if args.dir:
+            set_id, paths = add_dir(args.dir, args.set_id, out=args.out)
+            print(f"收下 {len(paths)} 条 → 任务集 {set_id}")
+            for path in paths:
+                print(f"  {os.path.basename(path)}")
+        else:
+            task = _read_task(args)
+            set_id, dest = add_task(task, args.set_id, out=args.out, path=True)
+            print(f"任务 {task['taskNo']}　{task['title']}　"
+                  f"→ `{task['application']}`")
+            print(f"收进任务集 {set_id}：{dest}")
+    except LocalCheckError as e:
+        _note(f"这条任务不合规（**没有写任何文件**）：{e}")
+        return 2
+    _note("")
+    _note("接着验一遍：`tasks check`；要交给 guide：`tasks handoff <编号>`。")
     return EXIT_OK
 
 
@@ -1148,151 +1192,88 @@ def cmd_tasks_sets(args):
 
     names = sets(args.out)
     if not names:
-        print("(还没有任何任务集——跑一次 `tasks gen`)")
+        print("(还没有任何任务集——先跑 `tasks new`)")
         return EXIT_OK
     for name in names:
         man = load_set(name, out=args.out)
-        by = "、".join(f"{k}×{v}" for k, v in man["byTask"].items())
-        print(f"{name}　{man['count']} 条　{by}　seed={man['seed']}")
-    return EXIT_OK
-
-
-def cmd_tasks_show(args):
-    """打印一条任务卡。**零平台调用。**"""
-    from .exercise import find_task, render_markdown
-
-    # 纯编号默认只看**最新那套**——编号每套都从 01 开始，跨套找必然歧义
-    set_id, path, task = find_task(args.target, out=args.out,
-                                   newest_only=args.target.isdigit())
-    if args.json:
-        print(_dump(task))
-    else:
-        print(render_markdown(task))
-        _note(f"任务集：{set_id}　卡片：{path}")
-    return EXIT_OK
-
-
-def cmd_tasks_handoff(args):
-    """只打「交给 guide 的话」——照着念或粘过去就行。**零平台调用。**"""
-    from .exercise import find_task
-
-    set_id, _, task = find_task(args.target, out=args.out,
-                                newest_only=args.target.isdigit())
-    print(f"任务 {task['taskNo']}　{task['title']}（任务集 {set_id}）")
-    print()
-    print("素材：")
-    for i, mat in enumerate(task["materials"], 1):
-        line = f"  {i}. {mat['label']}　（{mat['who']}）"
-        print(line)
-        if mat.get("handoff"):
-            print(f"     > {mat['handoff']}")
-    print()
-    print("执行：")
-    for step in task["steps"]:
-        print(f"  {step['label']} → `{step['application']}`")
-        print(f"     > {step['handoff']}")
+        title = man.get("title") or ""
+        print(f"{name}　{man.get('count', 0)} 条　{title}")
     return EXIT_OK
 
 
 def cmd_tasks_check(args):
-    """本地校验：占位符都解析了没、应用名认识不、文件路径齐不齐。**零平台调用。**"""
-    from .exercise import find_task, set_tasks
+    """验任务。**零平台调用。**"""
+    from .exercise import check_task, find_task, set_tasks, sets
 
-    problems = []
-    if args.target in ("", None) or args.target == "all":
-        from .exercise import sets as _sets
-        names = _sets(args.out)
+    if args.target in (None, "", "all"):
+        names = sets(args.out)
         if not names:
             print("(还没有任何任务集)")
             return EXIT_OK
-        tasks = []
-        for name in names:
-            tasks += set_tasks(name, out=args.out)
+        groups = [(n, set_tasks(n, out=args.out)) for n in names]
     else:
-        tasks = [find_task(args.target, out=args.out,
-                           newest_only=args.target.isdigit())[2]]
+        sid, _, task = find_task(args.target, args.set_id, out=args.out,
+                                 newest_only=args.target.isdigit())
+        groups = [(sid, [task])]
 
-    import re as _re
-    for task in tasks:
-        hit = []
-        for mat in task["materials"]:
-            if mat.get("handoff") and _re.search(r"\{[a-z_]+\}", mat["handoff"]):
-                hit.append(f"素材「{mat['label']}」的交接语里还有没解析的 {{…}}")
-        for step in task["steps"]:
-            if step["application"] not in _KNOWN_APPS:
-                hit.append(f"执行那一步的应用 {step['application']!r} 不认识")
-            if _re.search(r"\{\{", json.dumps(step["args"], ensure_ascii=False)):
-                hit.append(f"步骤「{step['label']}」的参数里还有没解析的 {{{{…}}}}")
-        if hit:
-            problems.append((task, hit))
-    for task, hit in problems:
-        print(f"✗ {task['taskNo']}　{task['title']}")
-        for h in hit:
-            print(f"    - {h}")
+    bad = total = 0
+    for set_id, tasks in groups:
+        for task in tasks:
+            total += 1
+            problems = check_task(task, siblings=tasks)
+            if problems:
+                bad += 1
+                print(f"✗ [{set_id}] {task.get('taskNo')}　{task.get('title')}")
+                for p in problems:
+                    print(f"    - {p}")
     print()
-    print(f"共 {len(tasks)} 条，{len(problems)} 条有问题。")
-    return EXIT_ERROR if problems else EXIT_OK
+    print(f"共 {total} 条，{bad} 条有问题。")
+    return EXIT_ERROR if bad else EXIT_OK
 
 
-def cmd_tasks_set_speaker(args):
-    """把一套任务里的音色统一换掉（比如女生班要换成女声）。**零平台调用。**
+def cmd_tasks_handoff(args):
+    """只打「交给 guide 的话」。**零平台调用。**"""
+    from .exercise import find_task, handoff_lines, set_tasks
 
-    直接改 ``tasks/*.json`` 和重新渲染的 ``tasks/*.md``，不碰 ``manifest.json``。
-    """
-    from .exercise import (SPEAKERS_EN, load_set, render_markdown, root_dir,
-                           set_tasks)
-
-    if args.check:
-        with _client(args) as cli:
-            live = [s.param for s in cli.speech.SPEAKERS]
-        if args.speaker not in live:
-            _note(f"音色 {args.speaker!r} 不在平台的白名单里：{', '.join(live)}")
-            return 2
-    elif args.speaker not in SPEAKERS_EN:
-        _note(f"音色 {args.speaker!r} 不在白名单里：{', '.join(SPEAKERS_EN)}"
-              f"（加 --check 可以现问平台）")
+    if args.set_id and (args.target in (None, "", "all")):
+        for task in set_tasks(args.set_id, out=args.out):
+            print(handoff_lines(task, set_id=args.set_id))
+            print()
+        return EXIT_OK
+    if not args.target:
+        _note("要给一个编号（`tasks handoff 03`），或 `--set <任务集> --all`")
         return 2
-
-    from .exercise import sets as all_sets
-    if args.set_id:
-        set_ids = [args.set_id]
-    else:
-        # 不给任务集就只改**最新那套**——全改会动到历史清单，容易误伤。
-        # 要全改就显式传 set_id，或者自己写循环。
-        latest = all_sets(args.out)
-        if not latest:
-            _note("还没有任何任务集")
-            return EXIT_ERROR
-        set_ids = latest[:1]
-    changed = 0
-    for set_id in set_ids:
-        load_set(set_id, out=args.out)          # 存在性校验
-        for task in set_tasks(set_id, out=args.out):
-            touched = False
-            for mat in task["materials"]:
-                if (mat.get("args") or {}).get("speaker"):
-                    mat["args"]["speaker"] = args.speaker
-                    touched = True
-            if touched:
-                path = os.path.join(root_dir(args.out), set_id, "tasks",
-                                    f"{task['taskNo']}-{task['taskKey']}.json")
-                with open(path, "w", encoding="utf-8") as fh:
-                    json.dump(task, fh, ensure_ascii=False, indent=2)
-                    fh.write("\n")
-                with open(path[:-5] + ".md", "w", encoding="utf-8") as fh:
-                    fh.write(render_markdown(task))
-                changed += 1
-    print(f"改了 {changed} 条任务的音色 → {args.speaker}")
+    set_id, _, task = find_task(args.target, args.set_id, out=args.out,
+                                newest_only=args.target.isdigit())
+    print(handoff_lines(task, set_id=set_id))
     return EXIT_OK
 
 
-#: 执行那一步允许出现的应用名（跟各 skill 对应）。
-_KNOWN_APPS = {
-    "guide", "translate", "review", "trans-review", "oral-review", "kb-qa",
-    "speech", "question-gen", "image-gen", "text-gen",
-}
+def cmd_tasks_catalog(args):
+    """任务集的目录（markdown）。**零平台调用。**"""
+    from .exercise import catalog, root_dir, sets
+
+    if args.set_id or not args.write:
+        print(catalog(args.set_id, out=args.out))
+        return EXIT_OK
+    names = sets(args.out)
+    if not names:
+        _note("还没有任何任务集")
+        return EXIT_ERROR
+    set_id = names[0]
+    dest = os.path.join(root_dir(args.out), set_id, "清单.md")
+    with open(dest, "w", encoding="utf-8") as fh:
+        fh.write(catalog(set_id, out=args.out))
+    print(f"写到 {dest}")
+    return EXIT_OK
 
 
+def cmd_tasks_dump(args):
+    """把整个任务集打成 JSON（给 agent 或别的程序读）。**零平台调用。**"""
+    from .exercise import dump
+
+    print(_dump(dump(args.set_id, out=args.out)))
+    return EXIT_OK
 
 
 # ----------------------------------------------------------------------
@@ -3065,59 +3046,66 @@ def build_parser():
 
     # ---- tasks：任务生成（**独立于 guide 的路由，自己不调平台**）----
     #
-    # 产出的是**任务清单**：每条任务写明交给哪个应用、素材从哪来。
-    # 任务本身由 `guide` 路由到对应应用去执行。
+    # ⚠️ **任务不是这个 CLI 生成的**——它是 agent 现写的。这一组只做机器该做
+    # 的事：查题型、收任务、验、交给 guide。所以没有"按模板批量出题"。
     tks = sub.add_parser("tasks", aliases=["tk"],
-                         help="生成教学任务清单（**零平台调用**；任务交给 guide 执行）")
+                         help="任务生成（**零平台调用**；任务由 agent 写，任务交给 guide 执行）")
     tksub = tks.add_subparsers(dest="subcmd", required=True)
 
-    s = tksub.add_parser("list", help="有哪些题型")
-    s.set_defaults(func=cmd_tasks_list)
+    s = tksub.add_parser("types", help="有哪些题型")
+    s.set_defaults(func=cmd_tasks_types)
 
-    s = tksub.add_parser("gen", help="生成一套任务清单（**零平台调用**）")
-    s.add_argument("--task", default="all",
-                   help="题型名（逗号分隔），或 all（默认）；题型见 `tasks list`")
-    s.add_argument("--count", type=int, default=4,
-                   help="**每种题型**各几条（默认 4）")
-    s.add_argument("--seed", type=int, default=None,
-                   help="随机种子；给了就完全可复现")
-    s.add_argument("--speaker", default=None,
-                   help="把所有 TTS 素材的音色固定成它（默认随机）")
-    s.add_argument("--out", default=None,
-                   help="落盘根目录，默认 ~/.cache/unipus-aigc/tasks")
-    s.add_argument("--print", dest="print", action="store_true",
-                   help="同时把任务卡打到 stdout（批量时会很长）")
-    s.add_argument("--json", action="store_true", help="把 manifest 打到 stdout")
-    s.set_defaults(func=cmd_tasks_gen)
+    s = tksub.add_parser("show", help="看一种题型的说明，或看一条任务")
+    s.add_argument("target", metavar="题型|编号|标题")
+    s.add_argument("--set", default=None, dest="set_id", help="任务集（默认最新）")
+    s.add_argument("--out", default=None)
+    s.add_argument("--student", action="store_true",
+                   help="学生版：隐去标了 student_hidden 的条目")
+    s.add_argument("--json", action="store_true")
+    s.set_defaults(func=cmd_tasks_show)
+
+    s = tksub.add_parser("new", help="建一个空的任务集")
+    s.add_argument("--title", default=None, help="任务集标题")
+    s.add_argument("--out", default=None)
+    s.set_defaults(func=cmd_tasks_new)
+
+    s = tksub.add_parser("add", help="收下 agent 写好的任务（--stdin / --file / --dir）")
+    s.add_argument("--set", default=None, dest="set_id", help="任务集（默认最新）")
+    s.add_argument("--stdin", action="store_true",
+                   help="从标准输入读一条任务（**推荐**，省得写临时文件）")
+    s.add_argument("--file", default=None, help="从文件读一条任务")
+    s.add_argument("--dir", default=None, help="把一个目录里的 *.json 都收进来")
+    s.add_argument("--out", default=None)
+    s.set_defaults(func=cmd_tasks_add)
 
     s = tksub.add_parser("sets", help="已有的任务集")
     s.add_argument("--out", default=None)
     s.set_defaults(func=cmd_tasks_sets)
 
-    s = tksub.add_parser("show", help="打印一条任务卡")
-    s.add_argument("target", metavar="编号|标题")
-    s.add_argument("--out", default=None)
-    s.add_argument("--json", action="store_true")
-    s.set_defaults(func=cmd_tasks_show)
-
-    s = tksub.add_parser("handoff", help="只打「交给 guide 的话」")
-    s.add_argument("target", metavar="编号|标题")
-    s.add_argument("--out", default=None)
-    s.set_defaults(func=cmd_tasks_handoff)
-
-    s = tksub.add_parser("check", help="本地校验（**零平台调用**）")
+    s = tksub.add_parser("check", help="验任务（**零平台调用**）")
     s.add_argument("target", nargs="?", default="all", metavar="编号|标题|all")
+    s.add_argument("--set", default=None, dest="set_id", help="任务集（默认全部）")
     s.add_argument("--out", default=None)
     s.set_defaults(func=cmd_tasks_check)
 
-    s = tksub.add_parser("set-speaker",
-                         help="把一套任务里的音色统一换掉（**零平台调用**）")
-    s.add_argument("speaker", metavar="音色")
-    s.add_argument("set_id", nargs="?", default=None, metavar="任务集")
+    s = tksub.add_parser("handoff", help="只打「交给 guide 的话」")
+    s.add_argument("target", nargs="?", default=None, metavar="编号|标题")
+    s.add_argument("--set", default=None, dest="set_id", help="任务集（默认最新）")
     s.add_argument("--out", default=None)
-    s.add_argument("--check", action="store_true",
-                   help="现问平台的白名单（**这一条会调平台**）")
-    s.set_defaults(func=cmd_tasks_set_speaker)
+    s.set_defaults(func=cmd_tasks_handoff)
+
+    s = tksub.add_parser("catalog", help="任务集的目录（markdown）")
+    s.add_argument("--set", default=None, dest="set_id")
+    s.add_argument("--out", default=None)
+    s.add_argument("--write", action="store_true",
+                   help="写到最新那套任务集的 `清单.md`（否则打到 stdout）")
+    s.set_defaults(func=cmd_tasks_catalog)
+
+    s = tksub.add_parser("dump", help="把任务集打成 JSON")
+    s.add_argument("--set", default=None, dest="set_id")
+    s.add_argument("--out", default=None)
+    s.set_defaults(func=cmd_tasks_dump)
+
 
     # ---- trans-review：翻译评阅（op36）----
     #
