@@ -14,6 +14,10 @@
 * **出题（阅读材料 → 出题 → 采纳）** —— :class:`~unipus_aigc.question_gen.QuestionGenAPI`
 * **图像生成（AI 绘画 / 文生图）** —— :class:`~unipus_aigc.image_gen.ImageGenAPI`
 * **文章写作 / 文本生成** —— :class:`~unipus_aigc.article.ArticleAPI`
+* **任务生成 / 编排** —— :mod:`unipus_aigc.exercise`（把上面那些应用组成
+  **有序任务链**，如 TTS → 口语评阅）。**这一层不新增平台调用**，
+  而且 `gen` 只出任务卡、**一条请求都不发**；真跑在
+  :mod:`unipus_aigc.exercise_run` 里，一次一条。
 
 快速上手::
 
@@ -38,6 +42,7 @@ from .client import SyncOutcome, UnipusAIGC
 from .constants import (Level, Operation, RecordType, SubType, TaskStatus,
                         norm_lang, norm_lang_short)
 from .errors import AigcError, MissingTokenError, StillRunning, TaskFailed, TaskTimeout
+from .exercise import ALL_CHAINS, BANK, CHAINS, LocalCheckError, gen_batch
 from .sso import SsoError, encrypt_sso, login, refresh, needs_refresh
 from .kb_qa import KnowledgeBaseAPI
 from .article import (SUB_TYPES, TITLE_TYPES, TXT_TYPE, ArticleAPI, outline_markdown,
@@ -90,7 +95,12 @@ __all__ = [
     "TERMINAL_DOC_STATUS",
     "APPROVE_YES",
     "APPROVE_NO",
+    "ALL_CHAINS",
+    "CHAINS",
+    "BANK",
+    "gen_batch",
     "AigcError",
+    "LocalCheckError",
     "MissingTokenError",
     "SsoError",
     "encrypt_sso",

@@ -273,7 +273,24 @@ class QuestionGenAPI:
     # §3.1 答题
     # ------------------------------------------------------------------
     def answer(self, rm_id, question):
-        """§3.1 答题。"""
+        """§3.1 答题。
+
+        .. warning::
+           **实测打不通。** 文档（``55226315`` §3.1）写的是
+           ``POST /api/aigc/ques/ans {rmId, question}``，但：
+
+           * 两个主机（``uaigc.unipus.cn`` / ``aigc.unipus.cn``）都回
+             **HTTP 404**``{"status":404,"error":"Not Found",
+             "path":"/api/aigc/ques/ans"}``；
+           * 换了三个路径名（``ques/ans`` / ``ques/answer`` / ``ques/ansQues``）
+             和两种入参（带不带 ``quesCode``）**全是 404**；
+           * **前端产物里也搜不到它**——67 个 bundle 里 ``ques/`` 开头的端点
+             有 ``ques/gen`` / ``ques/word`` / ``ques/top`` 等一批，**没有
+             ``ques/ans``**。跟 §10.1 那三个空壳端点是同一类。
+
+           所以 ``questions answer`` **只保留 CLI 入口**，别在上面建链——
+           要"答题"只能人工。见 docs/call-chains.md §9.8。
+        """
         return self._c.post("ques/ans", {"rmId": rm_id, "question": question})
 
     # ------------------------------------------------------------------

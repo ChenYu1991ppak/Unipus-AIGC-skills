@@ -1090,6 +1090,191 @@ def _trans_review_texts(args):
 
 
 # ----------------------------------------------------------------------
+# exercise —— 任务生成 / 编排（**独立于 guide 的路由**）
+#
+# 这一组的 `gen` / `chains` / `check` / `show` / `list` **一条平台请求都不发**，
+# 所以它们也**不构造 client**——没配凭证的机器上照样能用来看任务卡。
+# 唯一会碰平台的是 `run --go`。
+# ----------------------------------------------------------------------
+def _exercise_chains(value):
+    from .exercise import ALL_CHAINS, LocalCheckError
+    raw = [c.strip() for c in str(value).split(",") if c.strip()]
+    if not raw or raw == ["all"]:
+        return "all"
+    for name in raw:
+        if name not in ALL_CHAINS:
+            raise LocalCheckError(f"没有这条链路：{name!r}。可选："
+                                  f"{', '.join(ALL_CHAINS)}，或 all")
+    return raw
+
+
+def cmd_exercise_chains(args):
+    """列出四条链路。**零平台调用**（不构造 client，不需要 token）。"""
+    from .exercise import chains_table
+
+    print(chains_table())
+    print()
+    _note("四条链路都是**跨应用**的：每个应用自己内部的异步链早就封在它的 API 里了，")
+    _note("所以「多步任务」只能这样组合。")
+    _note("")
+    _note("`exercise gen` 只出任务卡，**不碰平台**；真跑是 `exercise run <taskId> --go`，")
+    _note("一次一条，跑完会用残留清单告诉你平台上都留下了什么。")
+    return EXIT_OK
+
+
+def cmd_exercise_gen(args):
+    """生成任务卡。**零平台调用。**"""
+    from .exercise import LocalCheckError, gen_batch, write_batch
+
+    try:
+        chains = _exercise_chains(args.chain)
+        batch_id, tasks, manifest = gen_batch(chains, args.count,
+                                              seed=args.seed, rm_id=args.rm_id)
+    except LocalCheckError as e:
+        _note(f"用错了（**没有写任何文件**）：{e}")
+        return 2
+    dest = write_batch(batch_id, tasks, manifest, out=args.out)
+
+    if args.json:
+        print(_dump(manifest))
+    else:
+        print(f"批次 {batch_id}　共 {len(tasks)} 条任务"
+              f"（内容互不重复：{manifest['distinctSignatures']}/{len(tasks)}）")
+        by_chain = {}
+        for task in tasks:
+            by_chain.setdefault(task["chain"], []).append(task)
+        for name, group in by_chain.items():
+            print(f"\n{name}　{group[0]['chainName']}　{len(group)} 条")
+            for task in group:
+                print(f"  {task['taskId']}　{task['title']}")
+        print(f"\n落盘：{dest}")
+    _note("")
+    _note("⚠️ **上面这些只是任务卡，一个平台请求都没发。**")
+    _note("要看某一条：`exercise show <taskId>`；校验一个批次：`exercise check <batchId>`；")
+    _note("真跑一条：`exercise run <taskId> --go`（会先打印计划，跑完给残留清单）。")
+    if manifest["distinctSignatures"] != len(tasks):
+        _note("内部不一致：distinctSignatures 不等于条数——这不该发生，请报告")
+        return EXIT_ERROR
+    return EXIT_OK
+
+
+def cmd_exercise_list(args):
+    """已有的批次。**零平台调用。**"""
+    from .exercise import batches, load_batch
+
+    names = batches(args.out)
+    if not names:
+        print("(还没有任何批次——跑一次 `exercise gen`)")
+        return EXIT_OK
+    for name in names:
+        man = load_batch(name, out=args.out)
+        chains = "、".join(f"{k}×{v}" for k, v in man["chains"].items())
+        print(f"{name}　{man['count']} 条　{chains}　seed={man['seed']}")
+    return EXIT_OK
+
+
+def cmd_exercise_show(args):
+    """打印一条任务卡。**零平台调用。**"""
+    from .exercise import load_task, render_markdown
+
+    task = load_task(args.task_id, out=args.out)
+    if args.json:
+        print(_dump(task))
+    else:
+        print(render_markdown(task, student=args.student))
+    return EXIT_OK
+
+
+def cmd_exercise_check(args):
+    """逐条校验。**零平台调用**（枚举型参数就地验，不取平台的活白名单）。"""
+    from .exercise import LocalCheckError, check_task, load_task
+
+    target = args.target
+    from .exercise import root_dir
+
+    tasks = []
+    batch_dir = os.path.join(root_dir(args.out), target, "tasks")
+    if os.path.isdir(batch_dir):
+        for name in sorted(os.listdir(batch_dir)):
+            if name.endswith(".json") and not name.endswith(".run.json"):
+                with open(os.path.join(batch_dir, name), encoding="utf-8") as fh:
+                    tasks.append(json.load(fh))
+        if not tasks:
+            _note(f"批次 {target} 里没有任务卡")
+            return EXIT_ERROR
+    else:
+        # 不是批次名，那就是一条 taskId
+        tasks = [load_task(target, out=args.out)]
+
+    bad = 0
+    for task in tasks:
+        problems = check_task(task)
+        if problems:
+            bad += 1
+            print(f"✗ {task['taskId']}　{task['title']}")
+            for p in problems:
+                print(f"    - {p}")
+        else:
+            print(f"✓ {task['taskId']}　{task['title']}")
+    print()
+    print(f"共 {len(tasks)} 条，{bad} 条有问题。")
+    if bad:
+        _note("注：`question-gen` 链路在没绑阅读材料时会列出一条——那是**设计**，")
+        _note("用 `--rm-id <id>` 重新生成即可（见 `exercise materials`）。")
+        return EXIT_ERROR
+    return EXIT_OK
+
+
+def cmd_exercise_materials(args):
+    """列出可用的阅读材料（只读，给 question-gen 链路挑 rmId）。"""
+    with _client(args) as cli:
+        rows = cli.question_gen.materials(page_size=args.size)
+    if not rows:
+        print("(账号上还没有阅读材料)")
+        _note("`rm/delete` 不存在——材料建了就删不掉，所以这条链路默认不建新材料，")
+        _note("只复用已有的。真要建，用 `questions create-material`（**不可撤销**）。")
+        return EXIT_OK
+    for row in rows:
+        print(f"{row.get('rmId') or row.get('id')}　"
+              f"count={row.get('generateCount')}　"
+              f"{(row.get('content') or '')[:40]}")
+    _note("")
+    _note("把这些 id 用 `exercise gen --chain question-gen --rm-id <id>` 绑进任务卡。")
+    return EXIT_OK
+
+
+def cmd_exercise_run(args):
+    """跑一条任务卡。**不给 --go 只打印计划，一个请求都不发。**"""
+    from .exercise import find_task_file, load_task
+    from .exercise import LocalCheckError
+    from .exercise_run import StepFailed, run_task
+
+    task_file = find_task_file(args.task_id, out=args.out)
+    task = load_task(args.task_id, out=args.out)
+
+    try:
+        _, lines = run_task(task, task_file, go=args.go, auto=args.auto,
+                            all_steps=args.all_steps, wait=args.wait, out=args.out)
+    except LocalCheckError as e:
+        _note(f"本地校验未通过（**没有发请求**）：{e}")
+        return 2
+    except StillRunning as e:
+        _note(str(e))
+        return EXIT_STILL_RUNNING
+    except StepFailed as e:
+        _note(f"{e}\n（已经停在那一歩，后面的步骤没有跑——"
+              f"上面那份残留清单是平台上的实际状态。）")
+        return EXIT_ERROR
+
+    print("\n".join(lines))
+    if not args.go:
+        _note("")
+        _note("**这只是计划**——真要跑把 `--go` 加上。默认只出计划，是为了不让")
+        _note("「批量生成」顺手变成「批量提交」。")
+    return EXIT_OK
+
+
+# ----------------------------------------------------------------------
 # sync —— 同步 operation（11 / 13 / 14 / 15 / 17）
 # ----------------------------------------------------------------------
 def _sync_outcome(outcome, label):
@@ -2857,6 +3042,71 @@ def build_parser():
     s.add_argument("--yes", action="store_true", help="确认删除")
     s.set_defaults(func=cmd_oral_delete)
 
+    # ---- exercise：任务生成 / 编排（**独立于 guide 的路由**）----
+    #
+    # 这是一层**编排**，不是新应用：把已经跑通的应用组成有序任务链
+    # （TTS → 口语评阅 / 作文题目 → 作文评阅 / 阅读材料 → 出题 → 答题 /
+    #   翻译 → 翻译评阅），支持批量生成且内容不重复。
+    #
+    # ⚠️ **`gen` / `chains` / `check` / `show` 一条平台请求都不发**——
+    # 它们不构造 client（所以没配凭证也能用）。真跑是 `run --go`。
+    ex = sub.add_parser("exercise", aliases=["ex"],
+                        help="生成教学任务链（默认只出任务卡，不调平台）")
+    exsub = ex.add_subparsers(dest="subcmd", required=True)
+
+    s = exsub.add_parser("chains", help="列出四条链路和各自的步骤")
+    s.set_defaults(func=cmd_exercise_chains)
+
+    s = exsub.add_parser("gen", help="生成任务卡（**零平台调用**）")
+    s.add_argument("--chain", default="all",
+                   help="链路名，或 all（默认）")
+    s.add_argument("--count", type=int, default=5,
+                   help="**每条链路**各出几条（默认 5）")
+    s.add_argument("--seed", type=int, default=None,
+                   help="随机种子；给了就完全可复现")
+    s.add_argument("--out", default=None,
+                   help="落盘根目录，默认 ~/.cache/unipus-aigc/exercise")
+    s.add_argument("--rm-id", default=None, dest="rm_id",
+                   help="绑定的阅读材料 id（只有 question-gen 链路用得上）")
+    s.add_argument("--print", dest="show", action="store_true",
+                   help="同时把任务卡打到 stdout（批量时会很长）")
+    s.add_argument("--json", action="store_true", help="把 manifest 打到 stdout")
+    s.set_defaults(func=cmd_exercise_gen)
+
+    s = exsub.add_parser("list", help="已有的批次")
+    s.add_argument("--out", default=None)
+    s.set_defaults(func=cmd_exercise_list)
+
+    s = exsub.add_parser("show", help="打印一条任务卡")
+    s.add_argument("task_id", metavar="taskId")
+    s.add_argument("--out", default=None)
+    s.add_argument("--student", action="store_true",
+                   help="学生版：隐去标了 student_hidden 的步骤（比如参考译文）")
+    s.add_argument("--json", action="store_true")
+    s.set_defaults(func=cmd_exercise_show)
+
+    s = exsub.add_parser("check", help="逐条校验一个批次/一条任务（**全离线**）")
+    s.add_argument("target", metavar="batchId|taskId")
+    s.add_argument("--out", default=None)
+    s.set_defaults(func=cmd_exercise_check)
+
+    s = exsub.add_parser("materials", help="列出可用的阅读材料（只读）")
+    s.add_argument("--size", type=int, default=20)
+    s.set_defaults(func=cmd_exercise_materials)
+
+    s = exsub.add_parser("run", help="跑一条任务卡。**不给 --go 只打印计划**")
+    s.add_argument("task_id", metavar="taskId")
+    s.add_argument("--out", default=None)
+    s.add_argument("--go", action="store_true",
+                   help="真的执行。不给就只打印计划，一个请求都不发")
+    s.add_argument("--auto", action="store_true",
+                   help="人工步骤用它的替身代做（默认**跳过并标注待人工**）")
+    s.add_argument("--all-steps", action="store_true", dest="all_steps",
+                   help="可选步骤（如建阅读材料）也执行")
+    s.add_argument("--wait", type=int, default=None,
+                   help="单步轮询上限（秒）；默认照各应用自己的默认值")
+    s.set_defaults(func=cmd_exercise_run)
+
     # ---- trans-review：翻译评阅（op36）----
     #
     # 名字**不是** "post-edit"：op36 只打分，不产出译文。早期文档的
@@ -2927,6 +3177,9 @@ def build_parser():
     s.add_argument("wm_ids", nargs="+", metavar="wmId")
     s.add_argument("--yes", action="store_true", help="确认删除")
     s.set_defaults(func=cmd_trans_review_delete)
+
+
+
 
     return p
 

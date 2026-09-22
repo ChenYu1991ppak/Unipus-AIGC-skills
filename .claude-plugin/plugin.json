@@ -1,9 +1,9 @@
 {
   "name": "unipus-aigc",
   "version": "1.0.0",
-  "description": "Unipus AIGC 平台调用链封装：翻译 / 作文评阅 / 翻译评阅 / 口语评阅 / 知识库问答 / 语音合成 / 智能出题 / 图像生成 / 文本生成，外加一个引导 skill 管凭证与路由。",
+  "description": "Unipus AIGC 平台调用链封装：翻译 / 作文评阅 / 翻译评阅 / 口语评阅 / 知识库问答 / 语音合成 / 智能出题 / 图像生成 / 文本生成，外加一个引导 skill 管凭证与路由，以及一个任务生成 skill 把多个应用编排成有序任务链。",
   "author": {
     "name": "chenyu"
   },
-  "keywords": ["unipus", "aigc", "translate", "review", "oral-review", "trans-review", "rag", "tts", "question-gen", "image-gen", "text-gen"]
+  "keywords": ["unipus", "aigc", "translate", "review", "oral-review", "trans-review", "rag", "tts", "question-gen", "image-gen", "text-gen", "task-gen", "exercise"]
 }
