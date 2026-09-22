@@ -1088,190 +1088,211 @@ def _trans_review_texts(args):
         return None, None
     return src, tgt
 
-
 # ----------------------------------------------------------------------
-# exercise —— 任务生成 / 编排（**独立于 guide 的路由**）
+# tasks —— 任务生成（**不调平台**）
 #
-# 这一组的 `gen` / `chains` / `check` / `show` / `list` **一条平台请求都不发**，
-# 所以它们也**不构造 client**——没配凭证的机器上照样能用来看任务卡。
-# 唯一会碰平台的是 `run --go`。
+# 产出的是**任务清单**：每条任务写明交给哪个应用、素材从哪来、期望产出什么。
+# 任务本身由 `guide` 路由到对应应用去执行——本域不构造 client，
+# 所以没配凭证也能出题。
+#
+# ⚠️ `gen` / `list` / `show` **一个平台请求都不发**。唯一的例外是
+# `tasks set-speaker --check`，它要用 `speech speakers` 校验音色。
 # ----------------------------------------------------------------------
-def _exercise_chains(value):
-    from .exercise import ALL_CHAINS, LocalCheckError
-    raw = [c.strip() for c in str(value).split(",") if c.strip()]
-    if not raw or raw == ["all"]:
-        return "all"
-    for name in raw:
-        if name not in ALL_CHAINS:
-            raise LocalCheckError(f"没有这条链路：{name!r}。可选："
-                                  f"{', '.join(ALL_CHAINS)}，或 all")
-    return raw
+def cmd_tasks_list(args):
+    """有哪些题型。**零平台调用。**"""
+    from .exercise import tasks_table
 
-
-def cmd_exercise_chains(args):
-    """列出四条链路。**零平台调用**（不构造 client，不需要 token）。"""
-    from .exercise import chains_table
-
-    print(chains_table())
-    print()
-    _note("四条链路都是**跨应用**的：每个应用自己内部的异步链早就封在它的 API 里了，")
-    _note("所以「多步任务」只能这样组合。")
-    _note("")
-    _note("`exercise gen` 只出任务卡，**不碰平台**；真跑是 `exercise run <taskId> --go`，")
-    _note("一次一条，跑完会用残留清单告诉你平台上都留下了什么。")
+    print(tasks_table())
+    _note("任务名前面的那串可以传给 `tasks gen --task`。")
     return EXIT_OK
 
 
-def cmd_exercise_gen(args):
-    """生成任务卡。**零平台调用。**"""
-    from .exercise import LocalCheckError, gen_batch, write_batch
+def cmd_tasks_gen(args):
+    """生成一套任务清单。**零平台调用。**"""
+    from .exercise import LocalCheckError, gen_batch, render_markdown, write_set
 
+    names = [n.strip() for n in str(args.task).split(",") if n.strip()]
     try:
-        chains = _exercise_chains(args.chain)
-        batch_id, tasks, manifest = gen_batch(chains, args.count,
-                                              seed=args.seed, rm_id=args.rm_id)
+        set_id, tasks, manifest = gen_batch(
+            "all" if names == ["all"] else names, args.count,
+            seed=args.seed, speaker=args.speaker)
     except LocalCheckError as e:
         _note(f"用错了（**没有写任何文件**）：{e}")
         return 2
-    dest = write_batch(batch_id, tasks, manifest, out=args.out)
 
+    dest = write_set(set_id, tasks, manifest, out=args.out)
     if args.json:
         print(_dump(manifest))
     else:
-        print(f"批次 {batch_id}　共 {len(tasks)} 条任务"
-              f"（内容互不重复：{manifest['distinctSignatures']}/{len(tasks)}）")
-        by_chain = {}
+        print(f"任务集 {set_id}　共 {len(tasks)} 条任务，"
+              f"覆盖 {len(manifest['applications'])} 个应用："
+              f"{'、'.join(manifest['applications'])}")
         for task in tasks:
-            by_chain.setdefault(task["chain"], []).append(task)
-        for name, group in by_chain.items():
-            print(f"\n{name}　{group[0]['chainName']}　{len(group)} 条")
-            for task in group:
-                print(f"  {task['taskId']}　{task['title']}")
+            print(f"  {task['taskNo']}　{task['title']}　→ `{task['application']}`")
         print(f"\n落盘：{dest}")
+        print(f"清单：{os.path.join(dest, '清单.md')}")
     _note("")
-    _note("⚠️ **上面这些只是任务卡，一个平台请求都没发。**")
-    _note("要看某一条：`exercise show <taskId>`；校验一个批次：`exercise check <batchId>`；")
-    _note("真跑一条：`exercise run <taskId> --go`（会先打印计划，跑完给残留清单）。")
-    if manifest["distinctSignatures"] != len(tasks):
-        _note("内部不一致：distinctSignatures 不等于条数——这不该发生，请报告")
-        return EXIT_ERROR
+    _note("⚠️ **上面这些只是任务清单，一个平台请求都没发。**")
+    _note("看某一条：`tasks show <编号>`；把任务交给 guide：见任务卡最下面的「交接语」。")
+    if args.print:
+        print()
+        for task in tasks:
+            print(render_markdown(task))
+            print()
     return EXIT_OK
 
 
-def cmd_exercise_list(args):
-    """已有的批次。**零平台调用。**"""
-    from .exercise import batches, load_batch
+def cmd_tasks_sets(args):
+    """已有的任务集。**零平台调用。**"""
+    from .exercise import load_set, sets
 
-    names = batches(args.out)
+    names = sets(args.out)
     if not names:
-        print("(还没有任何批次——跑一次 `exercise gen`)")
+        print("(还没有任何任务集——跑一次 `tasks gen`)")
         return EXIT_OK
     for name in names:
-        man = load_batch(name, out=args.out)
-        chains = "、".join(f"{k}×{v}" for k, v in man["chains"].items())
-        print(f"{name}　{man['count']} 条　{chains}　seed={man['seed']}")
+        man = load_set(name, out=args.out)
+        by = "、".join(f"{k}×{v}" for k, v in man["byTask"].items())
+        print(f"{name}　{man['count']} 条　{by}　seed={man['seed']}")
     return EXIT_OK
 
 
-def cmd_exercise_show(args):
+def cmd_tasks_show(args):
     """打印一条任务卡。**零平台调用。**"""
-    from .exercise import load_task, render_markdown
+    from .exercise import find_task, render_markdown
 
-    task = load_task(args.task_id, out=args.out)
+    # 纯编号默认只看**最新那套**——编号每套都从 01 开始，跨套找必然歧义
+    set_id, path, task = find_task(args.target, out=args.out,
+                                   newest_only=args.target.isdigit())
     if args.json:
         print(_dump(task))
     else:
-        print(render_markdown(task, student=args.student))
+        print(render_markdown(task))
+        _note(f"任务集：{set_id}　卡片：{path}")
     return EXIT_OK
 
 
-def cmd_exercise_check(args):
-    """逐条校验。**零平台调用**（枚举型参数就地验，不取平台的活白名单）。"""
-    from .exercise import LocalCheckError, check_task, load_task
+def cmd_tasks_handoff(args):
+    """只打「交给 guide 的话」——照着念或粘过去就行。**零平台调用。**"""
+    from .exercise import find_task
 
-    target = args.target
-    from .exercise import root_dir
-
-    tasks = []
-    batch_dir = os.path.join(root_dir(args.out), target, "tasks")
-    if os.path.isdir(batch_dir):
-        for name in sorted(os.listdir(batch_dir)):
-            if name.endswith(".json") and not name.endswith(".run.json"):
-                with open(os.path.join(batch_dir, name), encoding="utf-8") as fh:
-                    tasks.append(json.load(fh))
-        if not tasks:
-            _note(f"批次 {target} 里没有任务卡")
-            return EXIT_ERROR
-    else:
-        # 不是批次名，那就是一条 taskId
-        tasks = [load_task(target, out=args.out)]
-
-    bad = 0
-    for task in tasks:
-        problems = check_task(task)
-        if problems:
-            bad += 1
-            print(f"✗ {task['taskId']}　{task['title']}")
-            for p in problems:
-                print(f"    - {p}")
-        else:
-            print(f"✓ {task['taskId']}　{task['title']}")
+    set_id, _, task = find_task(args.target, out=args.out,
+                                newest_only=args.target.isdigit())
+    print(f"任务 {task['taskNo']}　{task['title']}（任务集 {set_id}）")
     print()
-    print(f"共 {len(tasks)} 条，{bad} 条有问题。")
-    if bad:
-        _note("注：`question-gen` 链路在没绑阅读材料时会列出一条——那是**设计**，")
-        _note("用 `--rm-id <id>` 重新生成即可（见 `exercise materials`）。")
-        return EXIT_ERROR
+    print("素材：")
+    for i, mat in enumerate(task["materials"], 1):
+        line = f"  {i}. {mat['label']}　（{mat['who']}）"
+        print(line)
+        if mat.get("handoff"):
+            print(f"     > {mat['handoff']}")
+    print()
+    print("执行：")
+    for step in task["steps"]:
+        print(f"  {step['label']} → `{step['application']}`")
+        print(f"     > {step['handoff']}")
     return EXIT_OK
 
 
-def cmd_exercise_materials(args):
-    """列出可用的阅读材料（只读，给 question-gen 链路挑 rmId）。"""
-    with _client(args) as cli:
-        rows = cli.question_gen.materials(page_size=args.size)
-    if not rows:
-        print("(账号上还没有阅读材料)")
-        _note("`rm/delete` 不存在——材料建了就删不掉，所以这条链路默认不建新材料，")
-        _note("只复用已有的。真要建，用 `questions create-material`（**不可撤销**）。")
-        return EXIT_OK
-    for row in rows:
-        print(f"{row.get('rmId') or row.get('id')}　"
-              f"count={row.get('generateCount')}　"
-              f"{(row.get('content') or '')[:40]}")
-    _note("")
-    _note("把这些 id 用 `exercise gen --chain question-gen --rm-id <id>` 绑进任务卡。")
-    return EXIT_OK
+def cmd_tasks_check(args):
+    """本地校验：占位符都解析了没、应用名认识不、文件路径齐不齐。**零平台调用。**"""
+    from .exercise import find_task, set_tasks
+
+    problems = []
+    if args.target in ("", None) or args.target == "all":
+        from .exercise import sets as _sets
+        names = _sets(args.out)
+        if not names:
+            print("(还没有任何任务集)")
+            return EXIT_OK
+        tasks = []
+        for name in names:
+            tasks += set_tasks(name, out=args.out)
+    else:
+        tasks = [find_task(args.target, out=args.out,
+                           newest_only=args.target.isdigit())[2]]
+
+    import re as _re
+    for task in tasks:
+        hit = []
+        for mat in task["materials"]:
+            if mat.get("handoff") and _re.search(r"\{[a-z_]+\}", mat["handoff"]):
+                hit.append(f"素材「{mat['label']}」的交接语里还有没解析的 {{…}}")
+        for step in task["steps"]:
+            if step["application"] not in _KNOWN_APPS:
+                hit.append(f"执行那一步的应用 {step['application']!r} 不认识")
+            if _re.search(r"\{\{", json.dumps(step["args"], ensure_ascii=False)):
+                hit.append(f"步骤「{step['label']}」的参数里还有没解析的 {{{{…}}}}")
+        if hit:
+            problems.append((task, hit))
+    for task, hit in problems:
+        print(f"✗ {task['taskNo']}　{task['title']}")
+        for h in hit:
+            print(f"    - {h}")
+    print()
+    print(f"共 {len(tasks)} 条，{len(problems)} 条有问题。")
+    return EXIT_ERROR if problems else EXIT_OK
 
 
-def cmd_exercise_run(args):
-    """跑一条任务卡。**不给 --go 只打印计划，一个请求都不发。**"""
-    from .exercise import find_task_file, load_task
-    from .exercise import LocalCheckError
-    from .exercise_run import StepFailed, run_task
+def cmd_tasks_set_speaker(args):
+    """把一套任务里的音色统一换掉（比如女生班要换成女声）。**零平台调用。**
 
-    task_file = find_task_file(args.task_id, out=args.out)
-    task = load_task(args.task_id, out=args.out)
+    直接改 ``tasks/*.json`` 和重新渲染的 ``tasks/*.md``，不碰 ``manifest.json``。
+    """
+    from .exercise import (SPEAKERS_EN, load_set, render_markdown, root_dir,
+                           set_tasks)
 
-    try:
-        _, lines = run_task(task, task_file, go=args.go, auto=args.auto,
-                            all_steps=args.all_steps, wait=args.wait, out=args.out)
-    except LocalCheckError as e:
-        _note(f"本地校验未通过（**没有发请求**）：{e}")
+    if args.check:
+        with _client(args) as cli:
+            live = [s.param for s in cli.speech.SPEAKERS]
+        if args.speaker not in live:
+            _note(f"音色 {args.speaker!r} 不在平台的白名单里：{', '.join(live)}")
+            return 2
+    elif args.speaker not in SPEAKERS_EN:
+        _note(f"音色 {args.speaker!r} 不在白名单里：{', '.join(SPEAKERS_EN)}"
+              f"（加 --check 可以现问平台）")
         return 2
-    except StillRunning as e:
-        _note(str(e))
-        return EXIT_STILL_RUNNING
-    except StepFailed as e:
-        _note(f"{e}\n（已经停在那一歩，后面的步骤没有跑——"
-              f"上面那份残留清单是平台上的实际状态。）")
-        return EXIT_ERROR
 
-    print("\n".join(lines))
-    if not args.go:
-        _note("")
-        _note("**这只是计划**——真要跑把 `--go` 加上。默认只出计划，是为了不让")
-        _note("「批量生成」顺手变成「批量提交」。")
+    from .exercise import sets as all_sets
+    if args.set_id:
+        set_ids = [args.set_id]
+    else:
+        # 不给任务集就只改**最新那套**——全改会动到历史清单，容易误伤。
+        # 要全改就显式传 set_id，或者自己写循环。
+        latest = all_sets(args.out)
+        if not latest:
+            _note("还没有任何任务集")
+            return EXIT_ERROR
+        set_ids = latest[:1]
+    changed = 0
+    for set_id in set_ids:
+        load_set(set_id, out=args.out)          # 存在性校验
+        for task in set_tasks(set_id, out=args.out):
+            touched = False
+            for mat in task["materials"]:
+                if (mat.get("args") or {}).get("speaker"):
+                    mat["args"]["speaker"] = args.speaker
+                    touched = True
+            if touched:
+                path = os.path.join(root_dir(args.out), set_id, "tasks",
+                                    f"{task['taskNo']}-{task['taskKey']}.json")
+                with open(path, "w", encoding="utf-8") as fh:
+                    json.dump(task, fh, ensure_ascii=False, indent=2)
+                    fh.write("\n")
+                with open(path[:-5] + ".md", "w", encoding="utf-8") as fh:
+                    fh.write(render_markdown(task))
+                changed += 1
+    print(f"改了 {changed} 条任务的音色 → {args.speaker}")
     return EXIT_OK
+
+
+#: 执行那一步允许出现的应用名（跟各 skill 对应）。
+_KNOWN_APPS = {
+    "guide", "translate", "review", "trans-review", "oral-review", "kb-qa",
+    "speech", "question-gen", "image-gen", "text-gen",
+}
+
+
 
 
 # ----------------------------------------------------------------------
@@ -3042,70 +3063,61 @@ def build_parser():
     s.add_argument("--yes", action="store_true", help="确认删除")
     s.set_defaults(func=cmd_oral_delete)
 
-    # ---- exercise：任务生成 / 编排（**独立于 guide 的路由**）----
+    # ---- tasks：任务生成（**独立于 guide 的路由，自己不调平台**）----
     #
-    # 这是一层**编排**，不是新应用：把已经跑通的应用组成有序任务链
-    # （TTS → 口语评阅 / 作文题目 → 作文评阅 / 阅读材料 → 出题 → 答题 /
-    #   翻译 → 翻译评阅），支持批量生成且内容不重复。
-    #
-    # ⚠️ **`gen` / `chains` / `check` / `show` 一条平台请求都不发**——
-    # 它们不构造 client（所以没配凭证也能用）。真跑是 `run --go`。
-    ex = sub.add_parser("exercise", aliases=["ex"],
-                        help="生成教学任务链（默认只出任务卡，不调平台）")
-    exsub = ex.add_subparsers(dest="subcmd", required=True)
+    # 产出的是**任务清单**：每条任务写明交给哪个应用、素材从哪来。
+    # 任务本身由 `guide` 路由到对应应用去执行。
+    tks = sub.add_parser("tasks", aliases=["tk"],
+                         help="生成教学任务清单（**零平台调用**；任务交给 guide 执行）")
+    tksub = tks.add_subparsers(dest="subcmd", required=True)
 
-    s = exsub.add_parser("chains", help="列出四条链路和各自的步骤")
-    s.set_defaults(func=cmd_exercise_chains)
+    s = tksub.add_parser("list", help="有哪些题型")
+    s.set_defaults(func=cmd_tasks_list)
 
-    s = exsub.add_parser("gen", help="生成任务卡（**零平台调用**）")
-    s.add_argument("--chain", default="all",
-                   help="链路名，或 all（默认）")
-    s.add_argument("--count", type=int, default=5,
-                   help="**每条链路**各出几条（默认 5）")
+    s = tksub.add_parser("gen", help="生成一套任务清单（**零平台调用**）")
+    s.add_argument("--task", default="all",
+                   help="题型名（逗号分隔），或 all（默认）；题型见 `tasks list`")
+    s.add_argument("--count", type=int, default=4,
+                   help="**每种题型**各几条（默认 4）")
     s.add_argument("--seed", type=int, default=None,
                    help="随机种子；给了就完全可复现")
+    s.add_argument("--speaker", default=None,
+                   help="把所有 TTS 素材的音色固定成它（默认随机）")
     s.add_argument("--out", default=None,
-                   help="落盘根目录，默认 ~/.cache/unipus-aigc/exercise")
-    s.add_argument("--rm-id", default=None, dest="rm_id",
-                   help="绑定的阅读材料 id（只有 question-gen 链路用得上）")
-    s.add_argument("--print", dest="show", action="store_true",
+                   help="落盘根目录，默认 ~/.cache/unipus-aigc/tasks")
+    s.add_argument("--print", dest="print", action="store_true",
                    help="同时把任务卡打到 stdout（批量时会很长）")
     s.add_argument("--json", action="store_true", help="把 manifest 打到 stdout")
-    s.set_defaults(func=cmd_exercise_gen)
+    s.set_defaults(func=cmd_tasks_gen)
 
-    s = exsub.add_parser("list", help="已有的批次")
+    s = tksub.add_parser("sets", help="已有的任务集")
     s.add_argument("--out", default=None)
-    s.set_defaults(func=cmd_exercise_list)
+    s.set_defaults(func=cmd_tasks_sets)
 
-    s = exsub.add_parser("show", help="打印一条任务卡")
-    s.add_argument("task_id", metavar="taskId")
+    s = tksub.add_parser("show", help="打印一条任务卡")
+    s.add_argument("target", metavar="编号|标题")
     s.add_argument("--out", default=None)
-    s.add_argument("--student", action="store_true",
-                   help="学生版：隐去标了 student_hidden 的步骤（比如参考译文）")
     s.add_argument("--json", action="store_true")
-    s.set_defaults(func=cmd_exercise_show)
+    s.set_defaults(func=cmd_tasks_show)
 
-    s = exsub.add_parser("check", help="逐条校验一个批次/一条任务（**全离线**）")
-    s.add_argument("target", metavar="batchId|taskId")
+    s = tksub.add_parser("handoff", help="只打「交给 guide 的话」")
+    s.add_argument("target", metavar="编号|标题")
     s.add_argument("--out", default=None)
-    s.set_defaults(func=cmd_exercise_check)
+    s.set_defaults(func=cmd_tasks_handoff)
 
-    s = exsub.add_parser("materials", help="列出可用的阅读材料（只读）")
-    s.add_argument("--size", type=int, default=20)
-    s.set_defaults(func=cmd_exercise_materials)
-
-    s = exsub.add_parser("run", help="跑一条任务卡。**不给 --go 只打印计划**")
-    s.add_argument("task_id", metavar="taskId")
+    s = tksub.add_parser("check", help="本地校验（**零平台调用**）")
+    s.add_argument("target", nargs="?", default="all", metavar="编号|标题|all")
     s.add_argument("--out", default=None)
-    s.add_argument("--go", action="store_true",
-                   help="真的执行。不给就只打印计划，一个请求都不发")
-    s.add_argument("--auto", action="store_true",
-                   help="人工步骤用它的替身代做（默认**跳过并标注待人工**）")
-    s.add_argument("--all-steps", action="store_true", dest="all_steps",
-                   help="可选步骤（如建阅读材料）也执行")
-    s.add_argument("--wait", type=int, default=None,
-                   help="单步轮询上限（秒）；默认照各应用自己的默认值")
-    s.set_defaults(func=cmd_exercise_run)
+    s.set_defaults(func=cmd_tasks_check)
+
+    s = tksub.add_parser("set-speaker",
+                         help="把一套任务里的音色统一换掉（**零平台调用**）")
+    s.add_argument("speaker", metavar="音色")
+    s.add_argument("set_id", nargs="?", default=None, metavar="任务集")
+    s.add_argument("--out", default=None)
+    s.add_argument("--check", action="store_true",
+                   help="现问平台的白名单（**这一条会调平台**）")
+    s.set_defaults(func=cmd_tasks_set_speaker)
 
     # ---- trans-review：翻译评阅（op36）----
     #

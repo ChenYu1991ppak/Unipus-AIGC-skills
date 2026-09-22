@@ -13,11 +13,10 @@
 * **同步 operation（11/13/14/15/17）** —— :class:`~unipus_aigc.sync_ops.SyncAPI`
 * **出题（阅读材料 → 出题 → 采纳）** —— :class:`~unipus_aigc.question_gen.QuestionGenAPI`
 * **图像生成（AI 绘画 / 文生图）** —— :class:`~unipus_aigc.image_gen.ImageGenAPI`
-* **文章写作 / 文本生成** —— :class:`~unipus_aigc.article.ArticleAPI`
-* **任务生成 / 编排** —— :mod:`unipus_aigc.exercise`（把上面那些应用组成
-  **有序任务链**，如 TTS → 口语评阅）。**这一层不新增平台调用**，
-  而且 `gen` 只出任务卡、**一条请求都不发**；真跑在
-  :mod:`unipus_aigc.exercise_run` 里，一次一条。
+* **任务生成** —— :mod:`unipus_aigc.exercise`（产出**任务清单**：
+  每条任务写明交给哪个应用、素材从哪来、期望产出什么）。
+  **这一层不新增平台调用**，`gen` 只出任务清单、**一条请求都不发**；
+  任务本身由 `guide` 路由到对应应用去执行。
 
 快速上手::
 
@@ -42,7 +41,8 @@ from .client import SyncOutcome, UnipusAIGC
 from .constants import (Level, Operation, RecordType, SubType, TaskStatus,
                         norm_lang, norm_lang_short)
 from .errors import AigcError, MissingTokenError, StillRunning, TaskFailed, TaskTimeout
-from .exercise import ALL_CHAINS, BANK, CHAINS, LocalCheckError, gen_batch
+from .exercise import (ALL_TASKS, BANKS, TASKS, gen_batch, load_set,
+                       set_tasks, sets, write_set)
 from .sso import SsoError, encrypt_sso, login, refresh, needs_refresh
 from .kb_qa import KnowledgeBaseAPI
 from .article import (SUB_TYPES, TITLE_TYPES, TXT_TYPE, ArticleAPI, outline_markdown,
@@ -95,12 +95,15 @@ __all__ = [
     "TERMINAL_DOC_STATUS",
     "APPROVE_YES",
     "APPROVE_NO",
-    "ALL_CHAINS",
-    "CHAINS",
-    "BANK",
+    "TASKS",
+    "ALL_TASKS",
+    "BANKS",
     "gen_batch",
+    "write_set",
+    "load_set",
+    "set_tasks",
+    "sets",
     "AigcError",
-    "LocalCheckError",
     "MissingTokenError",
     "SsoError",
     "encrypt_sso",
