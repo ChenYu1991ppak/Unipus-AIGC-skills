@@ -3,10 +3,12 @@ name: guide
 description: >-
   Entry point for the Unipus AIGC plugin. Configure the login credential — either
   account+password with automatic JWT renewal (sso login) or a manually pasted
-  JWT — check token validity, list or clean up platform records, and route the
-  user to the right application skill or tell them what the platform can and
-  cannot do yet. Unipus AIGC 引导入口：配置登录凭证（含账号密码自动续期）、
-  体检 token、查看与清理历史记录、按需求路由到应用 skill。
+  JWT — check whether credentials already exist and renew the token, ask the user
+  for account+password when there are none, list or clean up platform records,
+  and route the user to the right application skill or tell them what the
+  platform can and cannot do yet. Unipus AIGC 引导入口：检查/配置登录凭证
+  （有账号密码就续 token，没有就问用户要，也提供手动更新方式）、
+  查看与清理历史记录、按需求路由到应用 skill。
 disable-model-invocation: true
 ---
 
@@ -53,57 +55,75 @@ bash "$S/scripts/run.sh" <子命令> [参数...]
 stderr 上可能有一条 urllib3 的 `NotOpenSSLWarning`，那是环境噪声，
 **判断成败只看退出码，别把 stderr 有输出当失败**。
 
-## 第 1 步：体检
+## 第 1 步：检查当前是否有账号密码
+
+**这是本 skill 的第一件事。** 先看落盘里有没有配过账号密码：
 
 ```bash
-bash "$S/scripts/run.sh" token
+bash "$S/scripts/run.sh" sso status
 ```
 
-- 退出码 `0` → 凭证有效，输出里带剩余天数。
-- 退出码 `1` 且提示 `EXPIRED` → 过期了，走下面「配凭证」。
-- 退出码 `1` 且提示 `未找到 JWT` → 没配过，走「配凭证」。
+看输出里的 **`密码`** 一行，据此分成两条路：
 
-依赖缺失（`ModuleNotFoundError: requests` / `socketio`）时先装：
+| `sso status` 的结果 | 含义 | 走哪条 |
+| --- | --- | --- |
+| `密码      : 已加密落盘` | 配过账号密码 | **有** → 走 A |
+| `密码      : (没有)` | 从没配过，或用户 `sso forget` 过 | **没有** → 走 B |
+| 命令报 `未找到 JWT` 之类 | 什么都没配 | **没有** → 走 B |
+
+### A. 有账号密码 → 更新 token
+
+**通常什么都不用做**——token 失效时 `load_token()` 会自己续。
+但既然用户主动来了，就确认一下、顺手刷一枚新的：
 
 ```bash
-python3 -m pip install -r "<plugin 根>/requirements.txt"
+bash "$S/scripts/run.sh" token            # 退出码 0 = 可用；1 = 过期
+bash "$S/scripts/run.sh" sso refresh      # 强制换一枚新的（可选）
 ```
 
-## 第 2 步：配凭证
+- 两条都成功 → 告诉用户「凭证正常，JWT 已在 X 小时后过期前自动续」，
+  然后直接进第 3 步问他要做什么。
+- `sso refresh` 失败（比如 `rt` 过期、密码改过）→ 落到 **B**，重新问他要一次。
 
-**两种方式，先问用户要哪种。** 默认推荐方式一。
+### B. 没有账号密码 → 询问用户
 
-### 方式一：账号密码，之后自动续期（推荐）
-
-问用户要**账号（邮箱）和密码**，然后：
+**问用户要账号和密码**，然后落到磁盘：
 
 ```bash
 printf '%s' '<用户给的密码>' | bash "$S/scripts/run.sh" sso login --account '<邮箱>' --stdin
 ```
 
-用 `--stdin` 传密码——位置参数会进 `ps` 和 shell 历史。
-
 配一次之后 JWT 每 48 小时自动换新，`rt` 30 天过期后自动用密码重登。
 **以后不用再管凭证。**
 
-必须对用户说清楚的三件事（**别省略**）：
+如果用户当场不想给账号密码，告诉他还有**手动**那条路（见下「手动更新账号密码」），
+或者干脆先跳过——下次要用应用时再配。
 
-> 1. **密码会加密落盘**（`UNIPUS_AIGC_PASSWORD_ENC`）。
-> 2. **但密钥默认和 `.env` 放在同一个目录**（`~/.config/unipus-aigc/secret`），
->    所以这层加密挡的是"`.env` 被单独备份 / 分享 / 误提交"，
->    **挡不住能读你 home 目录的进程**。
-> 3. 想真隔开就把 `UNIPUS_AIGC_SECRET` 放进环境变量（比如从系统钥匙串注入）。
->    改主意了：`sso forget` 会把密码和 rt 一并删掉（**不带 `--yes` 只列不删**）。
+## 第 2 步：手动更新账号密码
 
-**回显只说：写入路径、账号、JWT 指纹、有效期。绝不复述密码或任何 token。**
+用户想自己动手、或者要改掉已存的凭证时，给他这两条。
 
-中途要看状态：
+### 手动改
 
 ```bash
-bash "$S/scripts/run.sh" sso status     # 材料齐不齐、JWT/rt 各还剩多久
+# 重新登录一次，覆盖旧的账号密码（最常用）
+printf '%s' '<新密码>' | bash "$S/scripts/run.sh" sso login --account '<邮箱>' --stdin
+
+# 只想删掉不想要的密码/rt，退回"手动粘 JWT"模式（不带 --yes 只列不删）
+bash "$S/scripts/run.sh" sso forget
 ```
 
-### 方式二：手动粘一枚 JWT
+也可以直接编辑落盘文件（**权限 `600`**，就在用户主目录下、不在仓库里）：
+
+```
+~/.config/unipus-aigc/.env
+    UNIPUS_AIGC_ACCOUNT       账号
+    UNIPUS_AIGC_PASSWORD_ENC  加密后的密码（**改不了明文，要换密码用上面的 sso login**）
+    UNIPUS_AIGC_TOKEN         当前 JWT
+    UNIPUS_AIGC_RT            refresh token
+```
+
+### 不想存密码：手动粘一枚 JWT
 
 JWT 是用户**自己**的登录凭证，**等于账号密码**。
 
@@ -120,27 +140,38 @@ printf '%s' '<用户给的 JWT>' | bash "$S/scripts/run.sh" set-token --stdin
 ```
 
 用 `--stdin` 而不是位置参数，这样 token 不会出现在 `ps` 输出里。
-默认写到 `~/.config/unipus-aigc/.env`（权限 `600`，目录 `700`）；
-加 `--scope cwd` 则写当前目录的 `.env`。
 
-**回显给用户时只说三件事：写入路径、指纹、有效期。绝不复述 JWT 本身。**
-覆盖旧值时会自动备份成 `<path>.bak`（同样 `600`），传错了能恢复。
+（代价：**48 小时后要再粘一次**，够不上自动续期方便。）
 
-必须对用户说清楚的一句话：
+### 两条路都必须对用户说清楚
 
-> **JWT 等于账号密码，不要提交到仓库、不要转发给任何人。**
+> **JWT / 密码等于账号密码，不要提交到仓库、不要转发给任何人。**
 
-（方式二的代价：**48 小时后要再粘一次**，够不上方式一方便。）
+存了密码的话，另外三件事**别省略**：
 
-凭证读取优先级（先到先得）：
+> 1. **密码会加密落盘**（`UNIPUS_AIGC_PASSWORD_ENC`）。
+> 2. **但密钥默认和 `.env` 放在同一个目录**（`~/.config/unipus-aigc/secret`），
+>    所以这层加密挡的是"`.env` 被单独备份 / 分享 / 误提交"，
+>    **挡不住能读你 home 目录的进程**。
+> 3. 想真隔开就把 `UNIPUS_AIGC_SECRET` 放进环境变量（比如从系统钥匙串注入）。
+
+**回显只说：写入路径、账号、JWT 指纹、有效期。绝不复述密码或任何 token。**
+
+### 凭证读取优先级（先到先得）
 
 1. 环境变量 `UNIPUS_AIGC_TOKEN`
 2. `./.env`（当前工作目录）
-3. `~/.config/unipus-aigc/.env` ← `set-token` 默认写这里
+3. `~/.config/unipus-aigc/.env` ← `sso login` / `set-token` 默认写这里
+
+依赖缺失（`ModuleNotFoundError: requests` / `socketio`）时先装：
+
+```bash
+python3 -m pip install -r "<plugin 根>/requirements.txt"
+```
 
 ## 第 3 步：路由到应用 skill
 
-已跑通、可直接用的九个：
+凭证没问题之后，按用户想做的事路由。已跑通、可直接用的九个：
 
 | 用户想做什么 | 唤起哪个 skill |
 | --- | --- |
@@ -192,11 +223,16 @@ bash "$S/scripts/run.sh" cleanup --ids <id> --ids <id> --yes   # 精确删除
 
 | 症状 | 先看什么 |
 | --- | --- |
-| `未找到 JWT` | 三处凭证位置都没配，走「配凭证」 |
-| `EXPIRED` | token 过期，重新登录复制 |
+| `未找到 JWT` | 没配过凭证 → 走「第 1 步」的 B（问用户要账号密码） |
+| `EXPIRED` | 配过的话先 `sso refresh`；还不行就走 B 重新给一次 |
+| 平台返回 `401` / 「用户登录失效」 | 同上——**这是凭证问题，不是参数问题** |
 | 退出码 `3` | **不是错误**，任务还在跑，稍后再 poll |
 | `文档翻译失败` | 大概率是语种码问题，见 translate skill |
 | `socketId不能为空` | socket.io 没连上，检查 `python-socketio`/`websocket-client` 装没装 |
+
+> ⚠️ **`sso refresh` 报「会话已失效」之类的错**：`sso refresh` 需要一份
+> **有效的 rt**。`sso status` 里如果显示 `rt` 已经过期、或者有 rt 但仍然
+> 续不上，就**别在 refresh 上反复试**——直接走 B 重新登录一次。
 
 完整的接口级排查材料在 plugin 仓库的 `docs/call-chains.md`（逐条调用链 +
 字段名踩坑表）和 `docs/app-catalog.md`（25 个应用全景）。
