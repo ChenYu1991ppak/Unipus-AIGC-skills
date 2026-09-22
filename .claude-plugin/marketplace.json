@@ -1,0 +1,15 @@
+{
+  "name": "Unipus-AIGC-skills",
+  "description": "Claude Code plugin marketplace hosting unipus-aigc: Unipus AIGC 平台的应用 skills（翻译 / 评阅 / 问答 / 合成 / 出题 / 生成）。",
+  "owner": {
+    "name": "chenyu"
+  },
+  "plugins": [
+    {
+      "name": "unipus-aigc",
+      "source": "./",
+      "description": "Unipus AIGC 平台的 Claude Code plugin：把平台上的应用封装成 skills —— 翻译 / 作文评阅 / 翻译评阅 / 口语评阅 / 知识库问答 / 语音合成 / 智能出题 / 图像生成 / 文本生成，外加一个引导 skill 管凭证与路由，以及一个任务生成 skill 出教学任务清单。",
+      "keywords": ["unipus", "aigc", "translate", "review", "oral-review", "trans-review", "rag", "tts", "question-gen", "image-gen", "text-gen", "task-gen", "exercise"]
+    }
+  ]
+}
