@@ -172,4 +172,4 @@ bash "$S/scripts/run.sh" oral delete <wmId>          # 不带 --yes 只列不删
 
 这条链路和口语评阅的实测细节（结果字段的真实形状、`wm/create` 为什么不传
 `subType`、`quesType` 为什么要落在 `wm/create` 上）记在 plugin 仓库的
-`docs/call-chains.md` §7。改这个应用之前先读那一节。
+内部的接口记录 §7。改这个应用之前先读那一节。

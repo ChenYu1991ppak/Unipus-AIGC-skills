@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """口语评阅（operation 90）。
 
-调用链（详见 docs/call-chains.md §7）::
+调用链（详见内部的接口记录 §7）::
 
     （本地音频先传七牛：common/uploadToken + up-z1.qiniup.com，folder 用 audio）
 

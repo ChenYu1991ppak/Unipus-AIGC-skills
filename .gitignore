@@ -5,3 +5,6 @@ __pycache__/
 venv/
 out/
 *.egg-info/
+
+# 内部资料（接口逆向清单、票据、探针）——**不入库**
+.internal-docs/

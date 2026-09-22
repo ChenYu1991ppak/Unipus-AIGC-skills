@@ -4,7 +4,7 @@
 本仓库原来只能"手动从浏览器 localStorage 粘一枚 JWT"，48 小时后失效、再粘一次。
 这个模块把它升级成：**第一次给账号密码，之后自动续。**
 
-链路（全部实测跑通，见 ``docs/call-chains.md`` §11）::
+链路（全部实测跑通，见 `内部的接口记录` §11）::
 
     (1) POST {SSO}/sso/0.1/sso/cip/login
           {username: AES_HEX(账号), password: AES_HEX(密码),

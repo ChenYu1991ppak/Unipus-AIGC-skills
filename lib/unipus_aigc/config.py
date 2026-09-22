@@ -30,7 +30,7 @@ import time
 
 from .errors import MissingTokenError
 
-# ---- 服务端地址（见 docs/call-chains.md）----
+# ---- 服务端地址（见内部的接口记录）----
 #
 # ⚠️ **两个域名都是对的，不是二选一、也不是笔误——不要"顺手统一"成其中一个。**
 #

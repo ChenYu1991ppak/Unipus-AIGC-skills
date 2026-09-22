@@ -152,4 +152,4 @@ bash "$S/scripts/run.sh" speech records
 
 这条链路是全平台**最标准的一条异步链路**（`task/submit` + `queryTask`），
 别的 operation 也走同一套、只是提交字段不同。要照着它实现新应用时，
-读 plugin 仓库的 `docs/call-chains.md`。
+读 plugin 仓库的（未随仓库发布）内部的接口记录。

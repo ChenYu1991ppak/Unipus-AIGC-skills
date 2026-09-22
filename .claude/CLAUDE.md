@@ -4,7 +4,9 @@
 
 ### Issue tracker
 
-Issues and specs live as local markdown files under `.scratch/<feature-slug>/`. See `docs/agents/issue-tracker.md`.
+Issues and specs live as local markdown files under `.internal-docs/scratch/<feature-slug>/`
+(**not committed** — they record internal, non-public interface details).
+See `docs/agents/issue-tracker.md`.
 
 ### Triage labels
 

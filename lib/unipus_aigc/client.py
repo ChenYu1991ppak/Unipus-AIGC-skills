@@ -7,7 +7,7 @@
     with UnipusAIGC() as cli:
         cli.translate.text("Hello world", "en", "zh")
 
-调用链细节见 docs/call-chains.md。
+调用链细节见内部的接口记录。
 """
 
 import io
@@ -189,7 +189,7 @@ class UnipusAIGC:
         对 op102（知识库问答）尤其致命：它的答案**只走推送**、
         ``responseData`` 恒为 ``null``，见 :meth:`KnowledgeBaseAPI.ask`。
 
-        A/B 对照与定性记在 docs/call-chains.md §0「``socketId`` 的形态」。
+        A/B 对照与定性记在内部的接口记录 §0「``socketId`` 的形态」。
         """
         if self._sid:
             return self._sid

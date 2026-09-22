@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """文档 / 文本翻译。
 
-调用链（详见 docs/call-chains.md）::
+调用链（详见内部的接口记录）::
 
     文本:  translate/create(type=1) -> translate/detail 轮询
     文档:  upload_file -> translate/create(type=2) -> translate/detail 轮询

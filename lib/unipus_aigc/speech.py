@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """语音合成（operation 9）。
 
-调用链（详见 docs/call-chains.md）::
+调用链（详见内部的接口记录）::
 
     合成:  task/submit(operation=9, submitData={...}) -> task/queryTask 轮询
     记录:  speech/urlList 查历史 / speech/delUrl 删记录

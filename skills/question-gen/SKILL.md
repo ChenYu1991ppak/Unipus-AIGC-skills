@@ -180,4 +180,4 @@ bash "$S/scripts/run.sh" questions delete --rm-id <rmId>                # 该材
 
 这条链路混合了两种通道（`rm`/`ques` 多数是普通 HTTP，只有 op12 是异步任务），
 是"同一个业务跨两种通道"的样本。要照着它实现新应用时，读 plugin 仓库的
-`docs/call-chains.md`。
+内部的接口记录。

@@ -34,7 +34,7 @@
    ``trans_review`` 是**评阅打分**（只回一个 ``score``，没有译文）；
    要译文用 ``translate``。别把两者混起来。
 
-调用链与逆向说明见 ``docs/call-chains.md``。
+调用链与逆向说明见 `内部的接口记录`。
 """
 
 from .client import SyncOutcome, UnipusAIGC

@@ -5,8 +5,8 @@ Unipus AIGC 平台的 Claude Code plugin：把平台上的应用封装成 skills
 ## 环境安装
 
 ```bash
-claude plugin marketplace add <本仓库路径或 git 地址>
-claude plugin install unipus-aigc@<marketplace 名>
+claude plugin marketplace add https://github.com/ChenYu1991ppak/Unipus-AIGC-skills
+claude plugin install unipus-aigc@Unipus-AIGC-skills
 ```
 
 装完**重启** Claude Code 才生效。

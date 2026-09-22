@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """翻译评阅（operation 36）。
 
-调用链（详见 docs/call-chains.md §8）::
+调用链（详见内部的接口记录 §8）::
 
     (1) wm/create {title,type:"2",langFrom,langTo,content,translation} -> wmId
           ⚠️ type 是**字符串** "2"（跟口语评阅的 "3" 同理）。

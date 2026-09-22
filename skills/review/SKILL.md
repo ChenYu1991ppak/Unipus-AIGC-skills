@@ -190,5 +190,5 @@ bash "$S/scripts/run.sh" review poll <taskId> --wait 60
 
 ## 更深的材料
 
-调用链与接口清单见 plugin 仓库的 `docs/call-chains.md` §2。
+调用链与接口清单见 plugin 仓库的（未随仓库发布）内部的接口记录 §2。
 翻译评阅见 §8，口语评阅见 §7。

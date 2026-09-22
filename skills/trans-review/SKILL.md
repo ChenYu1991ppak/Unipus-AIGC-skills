@@ -196,4 +196,4 @@ bash "$S/scripts/run.sh" trans-review delete <wmId>     # 不带 --yes 只列不
 
 这条链路和实测细节（为什么它不叫译后编辑、`subType:70` 为什么不参与计算、
 语种码的完整对照矩阵、`wm/detail` 在三种评阅下的层级差异）记在 plugin 仓库的
-`docs/call-chains.md` §8。改这个应用之前先读那一节。
+内部的接口记录 §8。改这个应用之前先读那一节。

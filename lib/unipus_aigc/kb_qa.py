@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """知识库问答（RAG）。
 
-调用链（详见 docs/call-chains.md）::
+调用链（详见内部的接口记录）::
 
     建库:  rag/kbp/project/add       {projectName, desc, source}      -> kbId
     传文档: upload_file(folder="kb")

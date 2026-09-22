@@ -929,7 +929,7 @@ def cmd_oral_delete(args):
 # trans-review —— 翻译评阅（operation 36）
 #
 # **它不是"译后编辑"**：只回一个分数，不产出改后的译文。早期文档把它记错了，
-# 详见 lib/unipus_aigc/trans_review.py 的模块 docstring 与 docs/call-chains.md §8。
+# 详见 lib/unipus_aigc/trans_review.py 的模块 docstring 与内部的接口记录 §8。
 # ----------------------------------------------------------------------
 def cmd_trans_review_submit(args):
     src, tgt = _trans_review_texts(args)

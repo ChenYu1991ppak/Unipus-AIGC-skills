@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """智能评阅（作文）。
 
-调用链（详见 docs/call-chains.md）::
+调用链（详见内部的接口记录）::
 
     wm/create {title,type:"1",subType:93,topic,content,level}   -> wmId
     task/submit {operation:35, submitData:{topic,content,level,

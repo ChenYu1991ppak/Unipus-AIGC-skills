@@ -187,4 +187,4 @@ bash "$S/scripts/run.sh" tasks handoff 01
 ## 更深的材料
 
 题型要求、素材从哪来、每条注意事项的依据，都在 plugin 仓库的
-`docs/call-chains.md`（§12 是任务生成）。
+内部的接口记录（§12 是任务生成）。

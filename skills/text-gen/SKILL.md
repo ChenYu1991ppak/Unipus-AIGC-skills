@@ -176,4 +176,4 @@ bash "$S/scripts/run.sh" article delete <id>          # 只列不删
 
 这一条是**第二处"整个端点都是空壳"**的样本（第一处是 op50 知识掌握总结），
 也是**第一处"文档写了但前端根本没用过"**的样本。接口记录在 plugin 仓库的
-`docs/call-chains.md`。
+内部的接口记录。

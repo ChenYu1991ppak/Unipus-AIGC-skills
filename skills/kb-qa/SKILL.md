@@ -255,7 +255,7 @@ bash "$S/scripts/run.sh" kbv2 sources                         # 列已实测的 
   （"抱歉，我无法回答该问题。"），**而且不报错**。
 
 CLI 已经固定在 102，正常用不会碰到这条。只有绕过 CLI 直接照文档调接口时才要
-记得这件事。完整对照实验见 plugin 仓库的 `docs/call-chains.md` §3。
+记得这件事。完整对照实验见 plugin 仓库的（未随仓库发布）内部的接口记录 §3。
 
 ## 坑：老链路的参数名极不一致
 
@@ -330,4 +330,4 @@ bash "$S/scripts/run.sh" kbv2 clear-history <sessionId>          # 只列不删�
 ## 更深的材料
 
 调用链、文档解析状态机、v2 与老链路的接口清单见 plugin 仓库的
-`docs/call-chains.md` §3。
+内部的接口记录 §3。

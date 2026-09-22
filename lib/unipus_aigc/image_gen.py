@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """图像生成（AI 绘画，operation 10）。
 
-调用链（详见 ``docs/call-chains.md`` §5）::
+调用链（详见 `内部的接口记录` §5）::
 
     (1) img/getImgReferenceList  {}                无参，**只读**
           └─> value.data: ImgReference[]          ★ 风格白名单 + 每个风格的尺寸白名单

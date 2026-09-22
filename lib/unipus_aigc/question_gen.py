@@ -34,7 +34,7 @@
    所以**阅读材料建了就删不掉**——复用一条长期的，别每次建新的。
    （对照：绘画记录走 ``img/delete``，能删干净。）
 
-实测记录见 ``docs/call-chains.md``。
+实测记录见 `内部的接口记录`。
 """
 
 import json
@@ -289,7 +289,7 @@ class QuestionGenAPI:
              ``ques/ans``**。跟 §10.1 那三个空壳端点是同一类。
 
            所以 ``questions answer`` **只保留 CLI 入口**，别在上面建链——
-           要"答题"只能人工。见 docs/call-chains.md §9.8。
+           要"答题"只能人工。见内部的接口记录 §9.8。
         """
         return self._c.post("ques/ans", {"rmId": rm_id, "question": question})
 
