@@ -29,14 +29,26 @@ description: >-
 
    | 题型 | 执行交给 | 素材由谁产出 |
    | --- | --- | --- |
-   | `oral-drill` 朗读评测 | `oral-review` | 示范音频 ← `speech` |
-   | `essay-writing` 写作 | `review` | （题面写在任务里） |
-   | `reading-comprehension` 阅读理解 | `question-gen` | 阅读材料 ← 你写，或 `text-gen` 起草 |
-   | `translation-drill` 翻译 | `trans-review` | （原文写在任务里） |
-   | `picture-writing` 看图作文 | `review` | 插图 ← `image-gen` |
-   | `listening-comprehension` 听力 | `question-gen` | 脚本 ← 你写；音频 ← `speech` |
+   | `oral-drill` 朗读评测 | `oral-review` | 示范音频 + **学生录音** ← `speech`（两份，音色要不同） |
+   | `essay-writing` 写作 | `review` | 题面（写进任务里）；学生作文 ← **你写**，落成 `materials/NN-submission.txt` |
+   | `reading-comprehension` 阅读理解 | `question-gen` | 阅读材料 ← **你写**；学生作答 ← **你写**（等出完题再写） |
+   | `translation-drill` 翻译 | `trans-review` | 原文（写进任务里）；学生译文 ← **你写** |
+   | `picture-writing` 看图作文 | `review` | 插图 ← `image-gen`；学生作文 ← **你写**（等图出来再写） |
+   | `listening-comprehension` 听力 | `question-gen` | 脚本 ← **你写**；音频 ← `speech`；学生作答 ← **你写** |
 
 2. **要几条、什么学段**。
+
+> ⭐ **没有任何一步要人来做。** 这条任务清单要能**无人值守跑到底**，所以每个
+> 素材都得有个真正的产出方：
+>
+> * 平台能产的（音频、图像）→ `speech` / `image-gen`，写 `shell`；
+> * 平台产不了文本文件（**它只有"给一段文字打分"，没有"产出一份文本"的接口**）
+>   → `app` 写 **`agent`**，也就是**你自己按 `output` 现写**，写清写成什么样
+>   （词数、体裁、要覆盖哪些点、什么不许出现）。
+>
+> 这不是"伪造学生作业"：这是给老师用的练习包，"学生交上来的那份"其实是
+> **样例答案**——让评阅链有输入、让老师看见期望产出。`handoff` 里要说明白：
+> **评出来的是样例，不代表任何真实学生的成绩。**
 
 ## 命令入口
 
@@ -86,19 +98,22 @@ bash "$S/scripts/run.sh" tasks add --stdin <<'JSON'
   "tags": ["口语", "朗读", "书信"],
   "brief": "朗读下面这封信，录音后提交。\n\nDear Miss Chen, thank you for helping me with my English last term. …",
   "materials": [
-    {"label": "朗读示范音频", "who": "平台（TTS 合成）", "app": "speech",
+    {"label": "朗读示范音频", "who": "平台（speech）", "app": "speech",
      "purpose": "给学生一段标准范读",
      "shell": "speech say \"Dear Miss Chen, …\" --speaker us_annie --language 2 --speed 1.0 --out materials/01-demo.mp3",
      "saves_as": "materials/01-demo.mp3",
      "handoff": "把这段文字念成音频，美式发音，原速"},
-    {"label": "学生朗读录音", "who": "学生", "app": "student",
-     "saves_as": "materials/01-recording.mp3"}
+    {"label": "朗读录音（合成）", "who": "平台（speech）", "app": "speech",
+     "purpose": "平台没有「交一段录音」的入口，这份「学生录音」由 TTS 合成",
+     "shell": "speech say \"Dear Miss Chen, …\" --speaker en_luka --language 2 --speed 0.8 --out materials/01-recording.mp3",
+     "saves_as": "materials/01-recording.mp3",
+     "handoff": "同一段文字再念一遍，换英式发音、语速放慢到 0.8，这份当作学生的录音"}
   ],
   "steps": [
     {"n": 1, "label": "口语评阅", "application": "oral-review", "command": "oral review",
      "purpose": "给这段朗读打分并给出发音反馈",
-     "shell": "oral review materials/01-recording.mp3 \\\n    --content \"Dear Miss Chen, …\" --ques-type 1",
-     "outcome": "百分制总分 + 逐词发音建议",
+     "shell": "oral review materials/01-recording.mp3 \\\n    --content \"Dear Miss Chen, …\" --ques-type 5",
+     "outcome": "百分制总分 + 发音反馈；quesType=5 另给逐句分",
      "handoff": "评阅这段朗读录音，朗读原文是那封感谢信"}
   ],
   "notes": ["示范音频是标准发音，评阅分数基本都偏高——这条任务的价值在给学生一段范读。"]
@@ -120,7 +135,8 @@ bash "$S/scripts/run.sh" tasks catalog --write       # 生成 清单.md
 
 `check` 会验：结构齐不齐、应用名认不认识、**shell 能不能解析**、
 **引用的 `materials/xx` 前面有没有产出过**、同一套里标题有没有撞、
-TTS 音色在不在已实测的名单里。
+TTS 音色在不在已实测的名单里，以及**模型现写的那几份有没有写 `output`**
+（不写清楚写成什么样，写出来就不是任务要的那份）。
 
 ## 任务的 JSON 形状
 
@@ -130,17 +146,28 @@ TTS 音色在不在已实测的名单里。
 | `title` | **像真题一样的标题**，别叫"XXX 测试" |
 | `application` | 执行交给哪个应用（见题型的「执行交给」） |
 | `brief` | **学生看到的那段话**，含题面全文 |
-| `materials[]` | 素材：`label` / `who`（谁来做）/ `app` / `shell` / `saves_as` / `handoff` |
+| `materials[]` | 素材：`label` / `who`（谁来做）/ `app` / `shell` / `saves_as` / `output` / `handoff` |
+| ↳ `app: "agent"` | **你自己写**的那份：要 `output`（写成什么样）+ `saves_as`，**不要 `shell`** |
 | `steps[]` | 执行：`label` / `application` / `command` / `shell` / `outcome` / `handoff` |
 | `notes[]` | 这条任务必须让人知道的（平台限制、诚实说明） |
 
 两条硬要求：
 
-- **素材交给平台产出的，必须写 `saves_as`** —— 执行那一步要知道文件在哪。
-- **`shell` 要写出来**，不能只说"用 speech"：`check` 会拿去 `shlex` 解析，
-  引号配平、引用的文件存在，都在这一关拦。
+- **凡是会落成文件的素材，必须写 `saves_as`** —— 执行那一步要知道文件在哪。
+  不管是平台产的（音频、图像）还是你现写的（阅读材料、学生作答、样例作文）。
+- **要发平台请求的（`app` 是平台应用），`shell` 要写出来**，不能只说"用 speech"：
+  `check` 会拿去 `shlex` 解析，引号配平、引用的文件存在，都在这一关拦。
 
-`materials` 里 `app` 是 `student` / `teacher` 的表示人工准备，不用写 `shell`。
+`materials` 里 `app` 分三档：
+
+| `app` | 谁来产 | 要写什么 |
+| --- | --- | --- |
+| `student` / `teacher` | 人——但**只用于不落成文件的素材**（题面、待译原文这类本来就写在 `brief` 里的） | 什么都不用写 |
+| `agent` | **你（模型）现写** | `output` + `saves_as` + `handoff`，**不要 `shell`** |
+| 平台应用（`speech` / `image-gen` …） | 平台 | `shell` + `saves_as` + `handoff` |
+
+**写了 `saves_as` 就不能再写 `student`**——那说明执行那一步要去读这个文件，
+它得有个真能产出它的东西。
 
 ## 把任务交出去
 
@@ -163,26 +190,36 @@ bash "$S/scripts/run.sh" tasks handoff 01
 > JWT——那是 `/unipus-aigc:guide` 的职责。只有当用户想在**别的 skill** 里跑
 > 任务、而那边报凭证错时，才让他走 `/unipus-aigc:guide`。
 
-## 三条必须对用户说清楚的（都是平台属性，不是缺陷）
+## 必须对用户说清楚的（都是平台属性，不是缺陷）
 
-1. **朗读评测的分数天然偏高。** 示范音频是 TTS 合成的**标准发音**，
-   拿它去评阅实测 95–98。这条任务的价值在「给学生一段范读」和
-   「看反馈里该怎么读」，**不在测出学生多差**。写 `notes` 时要如实说。
+1. **交去评阅的那几份是模型或 TTS 产的，不是真人作业。** 朗读那条的"学生录音"
+   是 TTS 合成的**标准发音**，拿它去评阅实测 86–92（**分数高低主要看选段长短**：
+   文本越长、TTS 的句间停顿越格式化，分数反而越低，所以跨任务比这个分数没有
+   意义）；作文、译文那几条是**你照着题面写的样例答案**。所以要如实说：**分数是
+   题面和评分档位的体检，不是任何真实学生的成绩**。这条任务的价值在
+   「给学生一段范读 / 一份看得见的期望产出」和「看反馈里该怎么改」，
+   **不在测出学生多差**。写 `notes` 时要如实说。
 2. **阅读/听力练习的「答题」没有平台接口。** 文档里的 `ques/ans` 实测 404，
-   学生作答只能人工收，平台不判分。
+   平台不判分——`materials/NN-answers.txt` 是**留给老师人工批改的样例答案**，
+   不交给平台（也没法交）。
 3. **阅读材料建了就删不掉。** 平台没有 `rm/delete`。所以出题那类任务适合
    按学期规划好条数再跑，别随手试。
 
 另外两条涉及素材的：**出图只能用 `general_v2.1_L`**（文档点名的风格会被平台
 静默改写后失败）；**翻译评阅只给分、不产出译文**。
 
+**这几份样例文件是可以被覆盖的**：学生真交了作业，把 `materials/NN-submission.txt`
+（或 `NN-answers.txt`、`NN-recording.mp3`）换掉，同一条 `shell` 照跑，路径不用改。
+
 ## 范围之外
 
 - 本 skill **不由 `guide` 路由**——用户直接 `/unipus-aigc:task-gen` 唤起。
 - 想直接用某个应用（翻译一段文字、画一张图、就文档提问……）→ 让他运行
   `/unipus-aigc:guide`。
-- 本 skill **不给任务判分**：清单里写的是"期望产出"，学生交上来的东西对不对
+- 本 skill **不给任务判分**：清单里写的是"期望产出"，交上去的东西对不对
   归评阅类应用管。
+- 本 skill **只出清单，不执行**——写 `output` 说的是"该写成什么样"，
+  不是在这里就把文件写了。真要跑，交给 `guide`。
 
 ## 更深的材料
 

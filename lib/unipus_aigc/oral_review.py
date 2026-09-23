@@ -38,11 +38,12 @@
     :meth:`OralReviewAPI.format_report` 直接把 ``feedback`` 原样打出来，
     **不编造**一个 ``errorSegments`` 字段。
 
-    ``evaluation`` 里还带着一整套**恒为 null** 的字段（``fluency`` /
-    ``pronunciation`` / ``integrity`` / ``relevance`` / ``grammar`` /
-    ``sentences`` / ``coherence`` / ``asrRes`` / ``keywordPercent`` …）——
-    平台把字段骨架整个返回，但这段音频只有 ``duration`` / ``overall`` /
-    ``feedback`` / ``words`` 被填上。**别把它们当"评了 0 分"**。
+    ``evaluation`` 里带着一整套字段骨架（``fluency`` / ``pronunciation`` /
+    ``integrity`` / ``relevance`` / ``grammar`` / ``sentences`` / ``words`` /
+    ``coherence`` / ``asrRes`` / ``keywordPercent`` …），**哪些被填上取决于
+    ``quesType``**：实测 ``3`` / ``5`` 会把 ``fluency`` / ``pronunciation`` /
+    ``integrity`` / ``overall`` / ``speed`` / ``duration`` 全填成真数值。
+    没被填的字段是 ``null`` —— **别把它们当"评了 0 分"**。
 
     **2. ``wm/detail`` 对口语评阅是可用的**（跟作文评阅相反）。
     ``wm/detail`` 的**顶层** ``evaluation`` 同样是 ``null``，但
@@ -90,9 +91,32 @@ RECORD_TYPE = "3"
 #: 补在 ``wm/create`` 上。两条对照记录：``quesType: null`` 的那条提交失败、
 #: ``quesType: 1`` 的那条成功。
 #:
-#: 默认给 ``1``（朗读短文，CLI ``--ques-type`` 的文档口径）。已知取值只有这一个，
-#: 别的题型没实测过——要用别的值请显式传 ``ques_type``。
-DEFAULT_QUES_TYPE = 1
+#: **有效取值只有 ``{1, 3, 5}`` 三个**（0/2/4/6/7/8/10/11/12 回
+#: ``code=100 quesType字段值不支持``；``9`` 回 ``code=500 server error!``）。
+#: 三者的区别靠**时长上限**和**结果里的拆解**认：
+#:
+#: ======  ==========  ==========  ==========================
+#: 取值    题型        时长上限    结果
+#: ======  ==========  ==========  ==========================
+#: ``1``  单词测评    **20 秒**   ``evaluation.words[]``
+#: ``3``  句子测评    **60 秒**   ``evaluation.words[]``（扁平逐词）
+#: ``5``  篇章测评    未测到上限  ``evaluation.sentences[]``，每句内嵌 ``words[]``
+#: ======  ==========  ==========  ==========================
+#:
+#: 超时长的报错会把题型名念出来，是识别题型最省事的办法::
+#:
+#:     单词测评，音频时长不能超过20秒  | path=task/submit
+#:     句子测评，音频时长不能超过60秒  | path=task/submit
+#:
+#: **``1`` 不是「朗读短文」**——早先那句"默认 1 = 朗读短文"是从 CLI 帮助文本
+#: 抄来的，实测不成立：拿一段 42.7 秒的朗读短文去评，``1`` 直接回
+#: ``单词测评，音频时长不能超过20秒``。**平台没有一个专门给「朗读短文」的取值。**
+#:
+#: 默认给 ``5``：朗读/口语练习任务的素材都是 40～70 秒的短文，``1``/``3`` 的
+#: 上限都装不下，只有 ``5`` 没有撞到上限；而且它的 ``sentences[]`` 逐句带
+#: ``overall``，能定位到读错的是哪一句，比 ``3`` 那个 184 项的扁平 ``words[]``
+#: 有用（实测 72.9 秒的短文：``3`` 撞 60 秒上限被拒，``5`` 通过、总分 92）。
+DEFAULT_QUES_TYPE = 5
 
 
 class OralReviewAPI:

@@ -19,7 +19,8 @@ description: >-
 
 1. **音频文件在哪** —— 本地路径，或者已经在七牛上的 URL。没有音频就做不了。
    音频**没有**别的必填项（时长、语速都不用给）。
-   第一次拿不准时用**短音频**（10 秒以内）跑通再说——时长上限没实测过。
+   但有**时长上限**，而且上限跟着 `--ques-type` 走（20 秒 / 60 秒 / 无）——
+   见下面的表。**先确认这段音频有多长，再挑 quesType**，别反过来。
 2. **朗读原文是什么** —— 这段录音照读的那段文字。**实测服务端必填**
    （见下面「两个实测必填项」）。用户没给就**问他要**，别自己转写一段充数：
    评测内容跟音频对不上，反馈就是错的。
@@ -82,8 +83,24 @@ bash "$S/scripts/run.sh" oral review ./a.mp3 --content "I went to school yesterd
 `code=100 evaluationContent字段不能为空`。
 
 **2. `--ques-type`（题目类型）** —— 不给会报
-`code=100 quesType字段不能为空`。CLI 已经默认填 `1`（朗读短文），
-**正常用不着管它**；只有要换别的题型时才显式传。
+`code=100 quesType字段不能为空`。CLI 默认填 `5`（篇章测评）。
+
+**有效值只有 `{1, 3, 5}`**，而且**`1` 不是「朗读短文」**——那是早先照 CLI 帮助
+文本抄的，实测不成立。三者的区别看**时长上限**：
+
+| 值 | 题型 | 音频时长上限 | 结果里的拆解 |
+| --- | --- | --- | --- |
+| `1` | 单词测评 | **20 秒** | `evaluation.words[]` |
+| `3` | 句子测评 | **60 秒** | `evaluation.words[]`（扁平逐词） |
+| `5` | **篇章测评** | 没撞到上限（72.9 秒通过） | `evaluation.sentences[]`，每句内嵌 `words[]` |
+
+别的值全不收：`0/2/4/6/7/8/10/11/12` → `code=100 quesType字段值不支持`；
+`9` → `code=500 server error!`。
+
+**平台没有一个专门给「朗读短文」的取值。** 朗读练习的素材通常是 40～70 秒，
+`1` 和 `3` 的上限都装不下，只能走 `5`——这也是默认值给 `5` 的原因。
+超时长度的报错会把题型名念出来（`单词测评，音频时长不能超过20秒`），
+拿不准当前是哪个题型时，这是最省事的识别办法。
 
 关于第 2 条有个坑值得知道：报错路径是 `task/submit`，**但字段要写在 `wm/create`
 上**——平台是顺着 `wmId` 回记录里读这个值的，塞进 `submitData` 没用。
@@ -115,9 +132,13 @@ bash "$S/scripts/run.sh" oral review ./a.mp3 --content "I went to school yesterd
 
 **不要去找 `errorSegments` / `pronunciationIssues` 这类结构化字段**，
 逆向出来的前端代码里那两个名字是**展示层的变量名**，不在传输层。
-平台确实返回了一整套字段骨架（`fluency` / `pronunciation` / `integrity` /
-`relevance` / `grammar` / `sentences` / …），但那几个**实测恒为 null**——
-报告里会点一句「为 null，不是 0 分」，**别把 null 读成"这一项评了 0 分"**。
+平台返回的是一整套字段骨架（`fluency` / `pronunciation` / `integrity` /
+`relevance` / `grammar` / `sentences` / `words` / …），**哪些被填上取决于
+`--ques-type`**：实测 `3` / `5` 会把 `fluency` / `pronunciation` / `integrity`
+/ `overall` / `speed` / `duration` **全填成真数值**，并给出逐词（`3`）/ 逐句
+（`5`，句内再嵌 `words[]`）的拆解。
+**没被填的字段才是 `null`**——报告里会点一句「为 null，不是 0 分」，
+**别把 null 读成"这一项评了 0 分"**。
 
 ## 查询与重入
 

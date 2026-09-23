@@ -44,13 +44,59 @@ KNOWN_APPS = (
     "speech", "question-gen", "image-gen", "text-gen",
 )
 
-#: 素材那一步的 ``app``。前两个是人，不是应用。
+#: 素材那一步的 ``app``：**不是平台应用**，人或者模型。
+#:
+#: ``student`` / ``teacher`` 只留给「**不落成文件**」的素材——
+#: 题面、待译原文这类本来就写在 ``brief`` 里的东西；**不需要** ``shell`` /
+#: ``saves_as`` / ``handoff``。
+#:
+#: 一旦写了 ``saves_as``（说明执行那一步会去读这个文件），就必须指明真正的
+#: 产出方，不能再写 ``student``：文本归 :data:`AGENT_APP`，
+#: 音频 / 图像归 ``speech`` / ``image-gen``。
 HUMAN_APPS = ("student", "teacher")
+
+#: **你（模型）自己写**的一个 ``app`` 取值——不是平台应用，也不是人。
+#:
+#: 平台上没有任何"产出一份文本文件"的接口（`speech` / `image-gen` 只产音频和
+#: 图像），但任务要能**无人值守跑完**：阅读材料、学生作答、学生作文、学生译文
+#: 都得先有个文件躺在那儿，后面那一步（出题 / 评阅）才有东西可吃。
+#: 所以这些由模型**按素材自己的 ``output`` 现写**。
+#:
+#: ⚠️ **别读成"伪造学生作业"**：这是给老师用的练习包，学生交上来的那份是
+#: **样例答案**（让评阅链有输入、让老师看见期望产出），不是某个真人的作答。
+#: 所以 ``output`` 必须写实（词数、体裁、几个要点、什么不许出现），
+#: 还要在 ``handoff`` 里说清"这写的是样例，评阅分不代表任何真实学生"。
+AGENT_APP = "agent"
+
+#: 按「**产出的东西是不是一个文件**」分档：
+#:
+#: * :data:`HUMAN_APPS` —— 不落文件，什么都不用写
+#: * :data:`AGENT_APP` —— 模型现写文本文件，要 ``output`` / ``saves_as`` / ``handoff``
+#: * :data:`KNOWN_APPS` —— 平台应用产出，要 ``shell`` / ``saves_as`` / ``handoff``
+MATERIAL_KINDS = HUMAN_APPS + (AGENT_APP,) + KNOWN_APPS
+
+#: ``materials[].app`` 允许出现的全部取值。
+PRODUCERS = MATERIAL_KINDS
+
 
 #: 已实测的 TTS 音色（``speech`` 的白名单）。**只是一份提示**——
 #: 真要现问平台跑 `speech speakers`。写别的值 ``check`` 会**警告但不拦**，
 #: 因为那个名单平台会变。
 KNOWN_SPEAKERS = ("en_luka", "us_annie", "zh_ming", "zh_xiaoxiao", "zh_youyou")
+
+
+#: ``materials[].who`` 该写什么——**纯给人看的**，校验碰都不碰它，
+#: 真正决定"这一步能不能自动跑"的是 :data:`app`。
+WHO_NAMES = {
+    "student": "学生",
+    "teacher": "教师",
+    AGENT_APP: "模型（你自己写）",
+}
+
+
+def who_name(app):
+    """``app`` → 中文说法。平台应用一律说成「平台（xxx）」。"""
+    return WHO_NAMES.get(app, f"平台（{app}）")
 
 
 # ======================================================================
@@ -69,18 +115,29 @@ TASK_TYPES = {
             ("朗读示范音频", "speech",
              "给学生一段标准范读。`speech say <短文> --speaker <音色> "
              "--language 2 [--speed 0.8|1.0|1.2] --out materials/NN-demo.mp3`"),
-            ("学生朗读录音", "student", "学生自己录，存成 materials/NN-recording.mp3"),
+            ("朗读录音（合成）", "speech",
+             "**平台没有「交一段录音」的入口**，所以这份「学生录音」由 `speech` 合成："
+             "换一个跟示范音频**不同的音色**、语速稍慢，念**同一段原文**，"
+             "`speech say <短文> --speaker <另一个音色> --language 2 --speed 0.8 "
+             "--out materials/NN-recording.mp3`"),
         ],
         "shell": 'oral review materials/NN-recording.mp3 \\\n'
-                 '    --content "<朗读原文，逐字同示范音频>" --ques-type 1',
-        "outcome": "百分制总分 + 逐词发音建议（在 evaluation.feedback 那段文本里）",
+                 '    --content "<朗读原文，逐字同示范音频>" --ques-type 5',
+        "outcome": "百分制总分 + 发音反馈（在 evaluation.feedback 那段文本里）；"
+                   "quesType=5 另给 evaluation.sentences[]，逐句带分、句内嵌逐词分",
         "notes": [
             "**音色**：`en_luka`（英式）/ `us_annie`（美式），别的值先跑 "
-            "`speech speakers` 现问。音色和 `--language 2` 要对得上。",
-            "**示范音频是标准发音，拿它去评阅分数基本都偏高（实测 95–98）。**"
-            "这条任务的价值在「给学生一段范读」和「看反馈里该怎么读」，"
-            "**不在测出学生多差**——写任务卡时得如实说。",
-            "`--content` 是必填的朗读原文，要和示范音频念的**逐字相同**。",
+            "`speech speakers` 现问。音色和 `--language 2` 要对得上。"
+            "两份音频**用不同音色**，不然评出来的是同一段声音。",
+            "**交去评阅的那份是 TTS 合成的，不是真人录音**——分数会偏高"
+            "（短文本段实测 86–92）。这条任务的价值在「给学生一段范读」和「看反馈里"
+            "该怎么读」，**不在测出学生多差**，写任务卡时要如实说。"
+            "**得分档位主要反映选段长度**：文本越长、TTS 的句间停顿越格式化，"
+            "分数反而越低——跨任务比这个分数没有意义。",
+            "**题型只能填 1/3/5，而且 1 不是朗读短文**：1=单词测评（音频"
+            "**不能超过 20 秒**）、3=句子测评（≤60 秒）、5=篇章测评。"
+            "朗读素材都是 40～70 秒，所以只能走 3 或 5；默认给 5。",
+            "`--content` 是必填的朗读原文，要和两份音频念的**逐字相同**。",
         ],
     },
     "essay-writing": {
@@ -91,7 +148,11 @@ TASK_TYPES = {
             ("作文题面", "teacher",
              "**写在任务卡里**（交际情境 + 体裁 + 词数 + 要点提示）——"
              "真实作文题本来就是这样给的"),
-            ("学生作文正文", "student", "学生自己写，存成 materials/NN-submission.txt"),
+            ("学生作文", AGENT_APP,
+             "**平台没法给一段文字打分以外的路子**，而评阅那一步要读到一个文件，"
+             "所以**你按题面写一篇样例作文**存成 materials/NN-submission.txt。"
+             "`output` 要写实：词数区间、体裁、必须覆盖哪几个要点、什么不许出现"
+             "（比如不许超纲词）。**就照题面写一篇像学生的**，别写成范文。"),
         ],
         "shell": 'review essay --path materials/NN-submission.txt \\\n'
                  '    --topic "<话题>" --level <0 大学|1 高中|2 初中|3 小学>',
@@ -100,8 +161,11 @@ TASK_TYPES = {
             "`--level` 走 `constants.Level` 那套：**0 大学 / 1 高中 / 2 初中 / 3 小学**。",
             "结果里 `content` / `language` / `organization` / `mechanics` 是"
             "**评语字符串**，不是分数；分数只有 `*Score` 后缀的字段。",
-            "**别拿平台生成的文章去评阅**——那只会拿高分，学生学不到东西。"
-            "要样例就自己写一篇，或者让学生写。",
+            "**交去评阅的是模型写的样例作文**——它代表「这个题面下一份合格的"
+            "学生作业长什么样」，拿到的分是**题面和评分档位的体检**，"
+            "不是任何真实学生的成绩。这一点要写进 `notes`。",
+            "学生真写了作文，把 `materials/NN-submission.txt` 覆盖掉再跑同一条"
+            "`shell` 即可——路径不用改。",
         ],
     },
     "reading-comprehension": {
@@ -109,10 +173,14 @@ TASK_TYPES = {
         "application": "question-gen",
         "audience": "中学或大学英语课堂，一节阅读课",
         "materials": [
-            ("阅读材料", "text-gen",
-             "**用 `--material` 或 `--material-file` 直接给正文**时就省掉这一步；"
-             "要现写才走 `article create` → `article continue` 起草"),
-            ("学生作答", "student", "学生读完材料后作答，存成 materials/NN-answers.txt"),
+            ("阅读材料", AGENT_APP,
+             "**你写这篇短文**，存成 materials/NN-passage.txt——平台只有"
+             "「建材料」的入口（`create-material`），它吃一份**已经写好的正文**。"
+             "`output` 里写清词数、题材、生词控制（别超纲）。"),
+            ("学生作答", AGENT_APP,
+             "读完材料**按题作答、写成样例答案**存成 materials/NN-answers.txt。"
+             "出题是异步的，作答要等 `questions generate` 出完题再写；"
+             "`output` 里写清格式（每题一行「题号 + 答案」、选择题只写字母）。"),
         ],
         "shell": "questions create-material --path materials/NN-passage.txt "
                  "--education <1..7>   # → rmId\n"
@@ -121,11 +189,16 @@ TASK_TYPES = {
         "notes": [
             "**阅读材料删不掉**：平台没有 `rm/delete`，建一条少一条。"
             "所以已经写到文件里的材料用 `--material-file`，别在平台上重建。",
-            "**答题没有平台接口**：文档里的 `ques/ans` 实测 404，学生作答只能人工收。",
+            "**答题没有平台接口**：文档里的 `ques/ans` 实测 404，平台不判分。"
+            "所以材料本身的正文**用 `create-material --path` 交上去**就行，"
+            "学生作答那份 `NN-answers.txt` 是写给老师人工批改用的样例，"
+            "**不用**、也没法交给平台。",
             "`--education` 走 `question_gen.EDUCATION`：**1 小学…5 本科…7 其他，没有 0**。"
             "跟 `review` 的 `--level` **不是一套编号**。",
             "出题策略 `--ploy` 是 `code:count`，见 `question-gen` skill 的 `questions ploys`。"
             "**它跟 `create-material` 的 `subType` 不是一套编号**，别互相套用。",
+            "`NN-answers.txt` **必须在 `questions generate` 出完题之后再写**——"
+            "没看到题就写不出答案。写进 `notes` 提醒执行的人注意顺序。",
         ],
     },
     "translation-drill": {
@@ -134,9 +207,13 @@ TASK_TYPES = {
         "audience": "中学或大学英语课堂，随堂练习",
         "materials": [
             ("待译原文", "teacher", "**写在任务卡里**，标明考点"),
-            ("学生译文", "student", "学生自己翻，存成 materials/NN-submission.txt"),
+            ("学生译文", AGENT_APP,
+             "**你按原文翻一份样例译文**存成 materials/NN-submission.txt——"
+             "评阅那一步要读到一个文件。`output` 里写清：对应哪个学段、"
+             "要故意留一两处典型的初级错误（时态、冠词、中式语序），"
+             "不然每份都是满分，评阅结果没信息量。"),
         ],
-        "shell": 'tr review \\\n'
+        "shell": 'trans-review review \\\n'
                  '    --src-text "<原文>" --tgt-file materials/NN-submission.txt \\\n'
                  '    --src-lang <en|zh> --tgt-lang <en|zh>',
         "outcome": "一个百分制分数",
@@ -146,6 +223,9 @@ TASK_TYPES = {
             "语种码**只认小写 `en` / `zh`**，**写错不报错、只给假分数**"
             "（实测 `en`/`zho` → 42.58，`zh`/`en` → 0.00）。CLI 用 choices 挡住了。",
             "要评另一对语种**必须新建记录**，不要复用同一条 `--wm-id`。",
+            "**评阅的这份译文是模型写的样例**，不是哪个学生的作业——"
+            "分数反映的是原文难度和评分口径，写进 `notes`。",
+            "学生真交了译文，覆盖 `materials/NN-submission.txt` 再跑同一条 `shell`。",
         ],
     },
     "picture-writing": {
@@ -155,7 +235,11 @@ TASK_TYPES = {
         "materials": [
             ("插图", "image-gen",
              '`image draw "<画面描述>" --style general_v2.1_L --size 正方形`'),
-            ("学生作文正文", "student", "学生看图写，存成 materials/NN-submission.txt"),
+            ("学生作文正文", AGENT_APP,
+             "**你看着那张插图的画面描述写一篇样例作文**存成 "
+             "materials/NN-submission.txt——评阅那一步要读到一个文件。"
+             "`output` 里写清词数区间、要覆盖到画面里的哪几样东西、"
+             "什么不许出现（比如不许出现画面里没有的人物）。"),
         ],
         "shell": 'review essay --path materials/NN-submission.txt \\\n'
                  '    --topic "<题目>" --level <学段>',
@@ -165,6 +249,13 @@ TASK_TYPES = {
             "（`manhua` / `shuicai` / `xieshi` 之类）虽然也在线上白名单里，"
             "但提交后会被**静默改写**、然后失败或挂住。尺寸也要跟着风格走。",
             "出图不是秒级，`--wait` 留足；超时是退出码 3，**不是失败**。",
+            "**交去评阅的是模型照着插图写的样例作文**——分数代表「这个图"
+            "加这个题面能激出什么样的学生文字」，不是任何真实学生的成绩。"
+            "这一点要写进 `notes`。",
+            "学生真写了作文，把 `materials/NN-submission.txt` 覆盖掉再跑同一条"
+            "`shell` 即可——路径不用改。",
+            "**插图必须先出、作文后写**：看不到画面就写不出贴题的作文。"
+            "写进 `notes` 提醒执行的人注意顺序。",
         ],
     },
     "listening-comprehension": {
@@ -172,22 +263,34 @@ TASK_TYPES = {
         "application": "question-gen",
         "audience": "中学英语听力课，一节听说课",
         "materials": [
-            ("听力脚本", "teacher",
-             "**写在任务卡里**（听力原文，也是留给教师核对的依据）；"
-             "要现写就走 `article create` → `article continue` 起草"),
+            ("听力脚本", AGENT_APP,
+             "**你写这段脚本**，落成 materials/NN-script.txt——它既是下面合成音频"
+             "那一步的输入，也是留给教师核对题目正误的依据。`output` 里写清词数、"
+             "体裁（广播通知 / 独白 / 对话）。**不要提前发给学生**。"),
             ("听力音频", "speech",
              '`speech say "<脚本>" --speaker <音色> --language 2 '
              '[--speed 0.8|1.0] --out materials/NN-audio.mp3`'),
-            ("学生作答", "student", "学生听完作答，存成 materials/NN-answers.txt"),
+            ("学生作答", AGENT_APP,
+             "听完**按题作答、写成样例答案**存成 materials/NN-answers.txt。"
+             "出题是异步的，作答要等 `questions generate` 出完题再写；"
+             "`output` 里写清格式（每题一行「题号 + 答案」、选择题只写字母）。"),
         ],
         "shell": "questions create-material --path materials/NN-script.txt "
                  "--education <1..7>   # → rmId\n"
                  "questions generate <rmId> --ploy <策略code>:<题数>",
         "outcome": "rmId + 一组带 quesId 的题目",
         "notes": [
-            "**脚本要先写出来再合成**——`speech say` 直接吃文本，脚本是它的输入。",
+            "**脚本要先写出来再合成**——`speech say` 直接吃文本，脚本是它的输入。"
+            "脚本落成 `materials/NN-script.txt`，合成那一步从它读。",
             "出题那一步同样受「**阅读材料删不掉**」约束。要出题就得建材料。",
             "音色和语速影响难度：慢速（0.8）适合初中，原速适合高中以上。",
+            "**答题没有平台接口**：文档里的 `ques/ans` 实测 404，平台不判分。"
+            "所以 `NN-answers.txt` 是留给老师人工批改用的样例答案，"
+            "**不用**、也没法交给平台。",
+            "`NN-answers.txt` **必须在 `questions generate` 出完题之后再写**——"
+            "没听到音、没看到题就写不出答案。写进 `notes` 提醒执行的人注意顺序。",
+            "`--education` 走 `question_gen.EDUCATION`（**1 小学…5 本科…7 其他**），"
+            "跟 `review` 的 `--level` **不是一套编号**。",
         ],
     },
 }
@@ -209,8 +312,7 @@ def type_doc(name):
     lines.append("## 素材怎么来")
     lines.append("")
     for label, app, how in spec["materials"]:
-        who = {"student": "学生", "teacher": "教师"}.get(app, f"`{app}`")
-        lines.append(f"- **{label}**（{who}）：{how}")
+        lines.append(f"- **{label}**（{who_name(app)}）：{how}")
     lines.append("")
     lines.append("## 执行命令")
     lines.append("")
@@ -238,11 +340,16 @@ def type_doc(name):
 def _skeleton(name, spec):
     materials = []
     for label, app, _how in spec["materials"]:
-        item = {"label": label, "who": {"student": "学生", "teacher": "教师"}
-                .get(app, f"平台（{app}）"), "app": app}
+        item = {"label": label, "who": who_name(app), "app": app}
         if app not in HUMAN_APPS:
-            item["shell"] = "…"
             item["saves_as"] = f"materials/NN-{len(materials) + 1}.…"
+            item["handoff"] = "…"
+        if app == AGENT_APP:
+            # 模型现写的：**没有 shell**（不发平台请求），要点在 output 上——
+            # 写清楚写成什么样，读的人（也是模型）才写得对。
+            item["output"] = "<写成什么样：词数 / 体裁 / 覆盖哪些要点 / 不许出现什么>"
+        elif app not in HUMAN_APPS:
+            item["shell"] = "…"
         materials.append(item)
     return {
         "taskNo": "NN",
@@ -548,14 +655,31 @@ def check_task(task, *, siblings=()):
     for i, mat in enumerate(task.get("materials") or [], 1):
         tag = f"素材 {i}（{mat.get('label', '?')}）"
         app = mat.get("app")
-        if app and app not in KNOWN_APPS + HUMAN_APPS:
+        if app and app not in MATERIAL_KINDS:
             problems.append(f"{tag}的 app={app!r} 不认识")
         if mat.get("saves_as"):
-            # **学生/教师交上来的也是文件**，执行那一步会引用它——
-            # 早先只收"平台产出的"，结果 oral-drill 那类任务全被判"引用了
-            # 不存在的文件"（学生的录音明明写着 saves_as）。
+            # **落成文件的就是要被执行那一步读的**——所以它必须有个真能产出它的
+            # 东西。早先只收"平台产出的"，结果 oral-drill 那类任务全被判"引用了
+            # 不存在的文件"（录音明明写着 saves_as）。
             files.append(mat["saves_as"])
-        if app and app not in HUMAN_APPS:
+            if app in HUMAN_APPS:
+                problems.append(
+                    f"{tag}写了 `saves_as`，`app` 却还是 {app!r}——"
+                    f"写了 `saves_as` 就说明执行那一步要去读这个文件，"
+                    f"它得有人真的产出：文本写 `{AGENT_APP}`，"
+                    f"音频 / 图像写给对应的平台应用")
+        if app == AGENT_APP:
+            # **你现写的**：不发平台请求，所以**没有 shell**；
+            # 要的是"写成什么样"和"存到哪"。
+            if not mat.get("saves_as"):
+                problems.append(f"{tag}是模型现写的，但没写 `saves_as`——"
+                                f"执行那一步要知道文件在哪")
+            if not mat.get("output"):
+                problems.append(f"{tag}是模型现写的，但没写 `output`——"
+                                f"不写清楚写成什么样，写出来就不是任务要的那份")
+            if not mat.get("handoff"):
+                problems.append(f"{tag}缺 `handoff`——交给 guide 时没话说")
+        elif app and app not in HUMAN_APPS:
             if not mat.get("saves_as"):
                 problems.append(f"{tag}交给 {app} 产出，但没写 `saves_as`")
             if not mat.get("handoff"):
@@ -686,8 +810,9 @@ def render_task(task, *, student=False):
     if mats:
         lines.append("## 素材准备")
         lines.append("")
-        lines.append("这条任务要用到下面的东西。**能交给平台生成的就交给平台生成**"
-                     "（在「谁来做」里写明是哪个应用），学生自己做的不必。")
+        lines.append("这条任务要用到下面的东西。**没有任何一步要人来做**——"
+                     "平台能产的交给平台（看「谁来做」是哪个应用），"
+                     "平台产不了的本就是模型现写的（看「产出」那条怎么写）。")
         lines.append("")
         lines.append("| # | 素材 | 谁来做 | 存到哪 |")
         lines.append("| --- | --- | --- | --- |")
@@ -796,9 +921,8 @@ def tasks_table():
         spec = TASK_TYPES[name]
         rows.append(f"{name}　{spec['summary']}")
         rows.append(f"  执行交给：`{spec['application']}`")
-        mats = "、".join(
-            f"{label}（{'学生' if app == 'student' else '教师' if app == 'teacher' else app}）"
-            for label, app, _ in spec["materials"])
+        mats = "、".join(f"{label}（{who_name(app)}）"
+                         for label, app, _ in spec["materials"])
         rows.append(f"  素材：{mats}")
         rows.append("")
     return "\n".join(rows).rstrip()

@@ -41,9 +41,10 @@ from .client import SyncOutcome, UnipusAIGC
 from .constants import (Level, Operation, RecordType, SubType, TaskStatus,
                         norm_lang, norm_lang_short)
 from .errors import AigcError, MissingTokenError, StillRunning, TaskFailed, TaskTimeout
-from .exercise import (ALL_TYPES, TASK_TYPES, add_task, catalog, check_task,
+from .exercise import (AGENT_APP, ALL_TYPES, HUMAN_APPS, KNOWN_APPS, MATERIAL_KINDS,
+                       PRODUCERS, TASK_TYPES, WHO_NAMES, add_task, catalog, check_task,
                        find_task, handoff_lines, load_set, new_set, render_task,
-                       set_tasks, sets, type_doc)
+                       set_tasks, sets, type_doc, who_name)
 from .sso import SsoError, encrypt_sso, login, refresh, needs_refresh
 from .kb_qa import KnowledgeBaseAPI
 from .article import (SUB_TYPES, TITLE_TYPES, TXT_TYPE, ArticleAPI, outline_markdown,
@@ -98,6 +99,13 @@ __all__ = [
     "APPROVE_NO",
     "TASK_TYPES",
     "ALL_TYPES",
+    "KNOWN_APPS",
+    "HUMAN_APPS",
+    "AGENT_APP",
+    "MATERIAL_KINDS",
+    "PRODUCERS",
+    "WHO_NAMES",
+    "who_name",
     "new_set",
     "add_task",
     "load_set",

@@ -2998,7 +2998,9 @@ def build_parser():
         p.add_argument("--language-type", type=int, default=None, dest="language_type",
                        help="语言类型（口语评阅自有字段）")
         p.add_argument("--ques-type", type=int, default=None, dest="ques_type",
-                       help="题目类型，**实测必填**（不给用默认 %d=朗读短文）；"
+                       help="题目类型，**实测必填**（不给用默认 %d）；有效值只有 "
+                            "1/3/5，**不是 1=朗读短文**：1=单词测评（音频≤20 秒）、"
+                            "3=句子测评（≤60 秒）、5=篇章测评（没撞到上限）。"
                             "要写在 wm/create 上，放 submitData 里没用"
                             % DEFAULT_QUES_TYPE)
         p.add_argument("--grade-id", default=None, dest="grade_id",
